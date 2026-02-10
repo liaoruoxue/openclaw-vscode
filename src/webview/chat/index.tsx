@@ -136,22 +136,129 @@ function MarkdownContent({ content }: { content: string }) {
   );
 }
 
+// --- ActionButton ---
+
+function ActionButton({
+  label,
+  onClick,
+  title,
+}: {
+  label: string;
+  onClick: () => void;
+  title?: string;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      title={title}
+      style={{
+        background: "none",
+        border: "1px solid var(--vscode-panel-border, #555)",
+        borderRadius: 3,
+        color: "var(--vscode-foreground, #ccc)",
+        cursor: "pointer",
+        fontSize: 11,
+        padding: "1px 6px",
+        opacity: 0.7,
+      }}
+      onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.opacity = "1"; }}
+      onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.opacity = "0.7"; }}
+    >
+      {label}
+    </button>
+  );
+}
+
+// --- CopyFeedback helper ---
+
+function useCopyFeedback(): [string | null, (text: string) => void] {
+  const [copied, setCopied] = React.useState<string | null>(null);
+  const copy = (text: string) => {
+    navigator.clipboard.writeText(text).then(() => {
+      setCopied("Copied!");
+      setTimeout(() => setCopied(null), 1500);
+    });
+  };
+  return [copied, copy];
+}
+
 // --- MessageBubble ---
 
-function MessageBubble({ message }: { message: ChatMessage }) {
+function MessageBubble({
+  message,
+  onResend,
+}: {
+  message: ChatMessage;
+  onResend?: (text: string) => void;
+}) {
   const isUser = message.role === "user";
+  const [hovered, setHovered] = React.useState(false);
+  const [copied, copy] = useCopyFeedback();
+  const contentRef = React.useRef<HTMLDivElement>(null);
+
+  // Attach copy buttons to code blocks in rendered markdown
+  React.useEffect(() => {
+    if (isUser || !contentRef.current) return;
+    const pres = contentRef.current.querySelectorAll("pre");
+    pres.forEach((pre) => {
+      if (pre.querySelector(".code-copy-btn")) return;
+      const btn = document.createElement("button");
+      btn.className = "code-copy-btn";
+      btn.textContent = "Copy";
+      btn.title = "Copy code";
+      btn.addEventListener("click", () => {
+        const code = pre.querySelector("code")?.textContent ?? pre.textContent ?? "";
+        navigator.clipboard.writeText(code).then(() => {
+          btn.textContent = "Copied!";
+          setTimeout(() => { btn.textContent = "Copy"; }, 1500);
+        });
+      });
+      pre.style.position = "relative";
+      btn.style.cssText =
+        "position:absolute;top:4px;right:4px;background:var(--vscode-button-secondaryBackground,#444);" +
+        "color:var(--vscode-button-secondaryForeground,#ccc);border:none;border-radius:3px;" +
+        "padding:2px 8px;font-size:11px;cursor:pointer;opacity:0;transition:opacity 0.15s;";
+      pre.appendChild(btn);
+      pre.addEventListener("mouseenter", () => { btn.style.opacity = "1"; });
+      pre.addEventListener("mouseleave", () => { btn.style.opacity = "0"; });
+    });
+  }, [message.content, isUser]);
 
   return (
-    <div style={{ marginBottom: 12 }}>
+    <div
+      style={{ marginBottom: 12, position: "relative" }}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+    >
       <div
         style={{
-          fontWeight: 600,
-          fontSize: 12,
-          opacity: 0.7,
+          display: "flex",
+          alignItems: "center",
+          gap: 6,
           marginBottom: 4,
         }}
       >
-        {isUser ? "You" : "Agent"}
+        <span style={{ fontWeight: 600, fontSize: 12, opacity: 0.7 }}>
+          {isUser ? "You" : "Agent"}
+        </span>
+        {hovered && (
+          <span style={{ display: "flex", gap: 4 }}>
+            {isUser && onResend && (
+              <ActionButton
+                label="Resend"
+                title="Resend this message"
+                onClick={() => onResend(message.content)}
+              />
+            )}
+            {!isUser && message.content && (
+              <ActionButton
+                label={copied ?? "Copy"}
+                title="Copy message"
+                onClick={() => copy(message.content)}
+              />
+            )}
+          </span>
+        )}
       </div>
       {isUser ? (
         <div
@@ -167,6 +274,7 @@ function MessageBubble({ message }: { message: ChatMessage }) {
         </div>
       ) : (
         <div
+          ref={contentRef}
           style={{
             wordBreak: "break-word",
             padding: "6px 10px",
@@ -192,9 +300,11 @@ function MessageBubble({ message }: { message: ChatMessage }) {
 function MessageList({
   messages,
   streaming,
+  onResend,
 }: {
   messages: ChatMessage[];
   streaming: boolean;
+  onResend: (text: string) => void;
 }) {
   const endRef = React.useRef<HTMLDivElement>(null);
 
@@ -210,7 +320,7 @@ function MessageList({
         </div>
       )}
       {messages.map((m, i) => (
-        <MessageBubble key={i} message={m} />
+        <MessageBubble key={i} message={m} onResend={onResend} />
       ))}
       {streaming && (
         <div style={{ opacity: 0.5, fontSize: 12, padding: "0 10px" }}>
@@ -631,7 +741,7 @@ function App() {
         onSwitchSession={handleSwitchSession}
         onCreateSession={handleCreateSession}
       />
-      <MessageList messages={messages} streaming={streaming} />
+      <MessageList messages={messages} streaming={streaming} onResend={handleSend} />
       <InputBar
         streaming={streaming}
         disabled={isDisabled}
