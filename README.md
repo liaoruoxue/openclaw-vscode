@@ -1,4 +1,4 @@
-# OpenClaw ACP — VS Code Extension
+# OpenClaw — VS Code Extension
 
 OpenClaw AI Agent integration for VS Code, Cursor, and Windsurf. Chat with AI agents, render interactive Canvas UIs, and get code diffs — all through the [OpenClaw Gateway](https://openclaw.ai) protocol.
 
