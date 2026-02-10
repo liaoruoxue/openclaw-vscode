@@ -1,5 +1,8 @@
 import React from "react";
 import { createRoot } from "react-dom/client";
+import { marked } from "marked";
+
+marked.setOptions({ async: false, breaks: true, gfm: true });
 
 // @ts-expect-error — acquireVsCodeApi is injected by VS Code webview runtime
 const vscode = acquireVsCodeApi();
@@ -575,6 +578,228 @@ registerComponent("Terminal", ({ props }) => (
   </pre>
 ));
 
+// Table
+registerComponent("Table", ({ props }) => {
+  const columns = (props.columns as Array<{ key: string; label?: string }>) ?? [];
+  const rows = (props.rows as Array<Record<string, unknown>>) ?? [];
+  const striped = Boolean(props.striped);
+
+  return (
+    <table
+      style={{
+        width: "100%",
+        borderCollapse: "collapse",
+        margin: "8px 0",
+        fontSize: 13,
+      }}
+    >
+      <thead>
+        <tr>
+          {columns.map((col) => (
+            <th
+              key={col.key}
+              style={{
+                textAlign: "left",
+                padding: "6px 8px",
+                borderBottom: "2px solid var(--vscode-panel-border, #444)",
+                fontWeight: 600,
+              }}
+            >
+              {col.label ?? col.key}
+            </th>
+          ))}
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map((row, i) => (
+          <tr
+            key={i}
+            style={{
+              background: striped && i % 2 === 1
+                ? "var(--vscode-list-hoverBackground, rgba(255,255,255,0.04))"
+                : "transparent",
+            }}
+          >
+            {columns.map((col) => (
+              <td
+                key={col.key}
+                style={{
+                  padding: "4px 8px",
+                  borderBottom: "1px solid var(--vscode-panel-border, #333)",
+                }}
+              >
+                {String(row[col.key] ?? "")}
+              </td>
+            ))}
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+});
+
+// Progress
+registerComponent("Progress", ({ props }) => {
+  const value = Number(props.value ?? 0);
+  const max = Number(props.max ?? 100);
+  const pct = Math.min(100, Math.max(0, (value / max) * 100));
+
+  return (
+    <div style={{ margin: "4px 0" }}>
+      {props.label != null && (
+        <div style={{ fontSize: 12, marginBottom: 2 }}>{String(props.label)}</div>
+      )}
+      <div
+        style={{
+          width: "100%",
+          height: 8,
+          background: "var(--vscode-editor-background, #1e1e1e)",
+          borderRadius: 4,
+          overflow: "hidden",
+          border: "1px solid var(--vscode-panel-border, #444)",
+        }}
+      >
+        <div
+          style={{
+            width: `${pct}%`,
+            height: "100%",
+            background: "var(--vscode-progressBar-background, #0e70c0)",
+            borderRadius: 4,
+            transition: "width 0.3s ease",
+          }}
+        />
+      </div>
+    </div>
+  );
+});
+
+// Tabs
+registerComponent("Tabs", ({ props, children, onAction, dataModel }) => {
+  const [activeIndex, setActiveIndex] = React.useState(0);
+  const tabs = children ?? [];
+  const labels = (props.labels as string[]) ?? tabs.map((c, i) => (c.props.tabLabel as string) ?? c.id ?? `Tab ${i + 1}`);
+
+  return (
+    <div style={{ margin: "8px 0" }}>
+      <div
+        style={{
+          display: "flex",
+          borderBottom: "1px solid var(--vscode-panel-border, #444)",
+          gap: 0,
+        }}
+      >
+        {labels.map((label, i) => (
+          <button
+            key={i}
+            onClick={() => setActiveIndex(i)}
+            style={{
+              padding: "6px 16px",
+              background: i === activeIndex
+                ? "var(--vscode-editor-background, #1e1e1e)"
+                : "transparent",
+              color: i === activeIndex
+                ? "var(--vscode-foreground, #ccc)"
+                : "var(--vscode-descriptionForeground, #888)",
+              border: "none",
+              borderBottom: i === activeIndex
+                ? "2px solid var(--vscode-focusBorder, #007fd4)"
+                : "2px solid transparent",
+              cursor: "pointer",
+              fontSize: 13,
+            }}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+      <div style={{ padding: "8px 0" }}>
+        {tabs[activeIndex] && (
+          <RenderComponent
+            component={tabs[activeIndex]}
+            onAction={onAction}
+            dataModel={dataModel}
+          />
+        )}
+      </div>
+    </div>
+  );
+});
+
+// Modal
+registerComponent("Modal", ({ props, children, onAction, dataModel, id }) => {
+  if (!props.open) return null;
+
+  return (
+    <div
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "rgba(0,0,0,0.5)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        zIndex: 1000,
+      }}
+      onClick={(e) => {
+        if (e.target === e.currentTarget) {
+          onAction("onClose", { componentId: id });
+        }
+      }}
+    >
+      <div
+        style={{
+          background: "var(--vscode-editor-background, #1e1e1e)",
+          border: "1px solid var(--vscode-panel-border, #444)",
+          borderRadius: 8,
+          padding: 16,
+          minWidth: 300,
+          maxWidth: "80vw",
+          maxHeight: "80vh",
+          overflow: "auto",
+        }}
+      >
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+          {props.title != null && (
+            <h3 style={{ margin: 0, fontSize: 14 }}>{String(props.title)}</h3>
+          )}
+          <button
+            onClick={() => onAction("onClose", { componentId: id })}
+            style={{
+              background: "none",
+              border: "none",
+              color: "var(--vscode-foreground, #ccc)",
+              cursor: "pointer",
+              fontSize: 18,
+              lineHeight: 1,
+              padding: "0 4px",
+              marginLeft: "auto",
+            }}
+          >
+            ×
+          </button>
+        </div>
+        {children?.map((child) => (
+          <RenderComponent
+            key={child.id}
+            component={child}
+            onAction={onAction}
+            dataModel={dataModel}
+          />
+        ))}
+      </div>
+    </div>
+  );
+});
+
+// Markdown
+registerComponent("Markdown", ({ props }) => {
+  const html = React.useMemo(
+    () => marked.parse(String(props.content ?? ""), { async: false }) as string,
+    [props.content]
+  );
+  return <div className="markdown-content" dangerouslySetInnerHTML={{ __html: html }} />;
+});
+
 // --- RenderComponent ---
 
 function RenderComponent({
@@ -721,6 +946,7 @@ function App() {
       }
     };
     window.addEventListener("message", handler);
+    vscode.postMessage({ type: "ready" });
     return () => window.removeEventListener("message", handler);
   }, []);
 

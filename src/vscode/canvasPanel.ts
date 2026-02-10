@@ -6,6 +6,7 @@ export class CanvasPanel {
   private panel: vscode.WebviewPanel | null = null;
   private pendingMessages: A2UIMessage[] = [];
   private gateway: GatewayClient | null = null;
+  private webviewReady = false;
 
   constructor(private extensionUri: vscode.Uri) {}
 
@@ -37,26 +38,31 @@ export class CanvasPanel {
     this.panel.webview.html = this.getHtml(this.panel.webview, uri);
 
     this.panel.webview.onDidReceiveMessage((msg) => {
+      if (msg.type === "ready") {
+        this.webviewReady = true;
+        for (const m of this.pendingMessages) {
+          this.panel?.webview.postMessage({ type: "a2ui", payload: m });
+        }
+        this.pendingMessages = [];
+        return;
+      }
       this.handleWebviewMessage(msg);
     });
 
     this.panel.onDidDispose(() => {
       this.panel = null;
+      this.webviewReady = false;
     });
-
-    // Flush pending messages
-    for (const msg of this.pendingMessages) {
-      this.panel.webview.postMessage({ type: "a2ui", payload: msg });
-    }
-    this.pendingMessages = [];
   }
 
   postA2UIMessage(message: A2UIMessage): void {
-    if (this.panel) {
+    if (this.panel && this.webviewReady) {
       this.panel.webview.postMessage({ type: "a2ui", payload: message });
     } else {
       this.pendingMessages.push(message);
-      this.reveal();
+      if (!this.panel) {
+        this.reveal();
+      }
     }
   }
 
@@ -109,8 +115,36 @@ export class CanvasPanel {
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta http-equiv="Content-Security-Policy"
-    content="default-src 'none'; script-src ${webview.cspSource}; style-src ${webview.cspSource} 'unsafe-inline';">
+    content="default-src 'none'; script-src ${webview.cspSource}; style-src ${webview.cspSource} 'unsafe-inline'; img-src ${webview.cspSource} https:;">
   <title>OpenClaw Canvas</title>
+  <style>
+    .markdown-content { line-height: 1.6; }
+    .markdown-content p { margin: 0.5em 0; }
+    .markdown-content p:first-child { margin-top: 0; }
+    .markdown-content p:last-child { margin-bottom: 0; }
+    .markdown-content pre {
+      background: var(--vscode-editor-background);
+      padding: 12px; border-radius: 4px; overflow: auto;
+      font-family: var(--vscode-editor-font-family);
+    }
+    .markdown-content code {
+      background: var(--vscode-editor-background);
+      padding: 2px 4px; border-radius: 3px; font-size: 0.9em;
+    }
+    .markdown-content pre code { background: none; padding: 0; }
+    .markdown-content blockquote {
+      border-left: 3px solid var(--vscode-panel-border);
+      margin: 0.5em 0; padding-left: 12px; opacity: 0.8;
+    }
+    .markdown-content h1, .markdown-content h2, .markdown-content h3 { margin: 0.8em 0 0.4em; }
+    .markdown-content ul, .markdown-content ol { padding-left: 20px; margin: 0.4em 0; }
+    .markdown-content a { color: var(--vscode-textLink-foreground); }
+    .markdown-content table { border-collapse: collapse; margin: 0.5em 0; }
+    .markdown-content th, .markdown-content td {
+      border: 1px solid var(--vscode-panel-border); padding: 4px 8px;
+    }
+    .markdown-content img { max-width: 100%; }
+  </style>
 </head>
 <body>
   <div id="root"></div>
