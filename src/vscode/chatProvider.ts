@@ -149,20 +149,10 @@ export class ChatProvider implements vscode.WebviewViewProvider {
         break;
       }
       case "create_session": {
-        const config = vscode.workspace.getConfiguration("openclaw");
-        const agent = config.get<string>("session.defaultAgent", "main");
         const key = `acp:${crypto.randomUUID()}`;
-        try {
-          const session = await this.gateway.sessionCreate(key, agent);
-          this.currentSessionKey = session.key;
-          this.currentRunId = null;
-          this.postToWebview({ type: "session_created", session });
-        } catch (err) {
-          this.postToWebview({
-            type: "error",
-            message: `Failed to create session: ${err}`,
-          });
-        }
+        this.currentSessionKey = key;
+        this.currentRunId = null;
+        this.postToWebview({ type: "session_created", session: { key } });
         break;
       }
     }
