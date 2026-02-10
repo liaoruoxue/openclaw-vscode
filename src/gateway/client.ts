@@ -22,6 +22,8 @@ const COMMAND_TIMEOUT_MS = 30_000;
 const RECONNECT_BASE_MS = 1_000;
 const RECONNECT_MAX_MS = 30_000;
 const RECONNECT_MAX_ATTEMPTS = 10;
+const HEARTBEAT_INTERVAL_MS = 30_000;
+const HEARTBEAT_TIMEOUT_MS = 10_000;
 
 function base64UrlEncode(buf: Buffer): string {
   return buf.toString("base64").replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/g, "");
@@ -79,6 +81,8 @@ export class GatewayClient {
 
   private pendingRequests: Map<string, PendingRequest> = new Map();
   private commandIdCounter = 0;
+  private heartbeatInterval: ReturnType<typeof setInterval> | null = null;
+  private heartbeatTimeout: ReturnType<typeof setTimeout> | null = null;
 
   get state(): ConnectionState {
     return this._state;
@@ -100,6 +104,7 @@ export class GatewayClient {
   disconnect(): void {
     this.intentionalDisconnect = true;
     this.clearReconnectTimer();
+    this.stopHeartbeat();
     this.rejectAllPending("Client disconnected");
     if (this.ws) {
       this.ws.close(1000, "Client disconnect");
@@ -330,6 +335,7 @@ export class GatewayClient {
       clearTimeout(handshakeTimer);
       handshakeDone = true;
       this.setState("connected");
+      this.startHeartbeat(ws);
       onHandshakeComplete();
     };
 
@@ -442,6 +448,7 @@ export class GatewayClient {
     ws.on("close", () => {
       clearTimeout(handshakeTimer);
       this.ws = null;
+      this.stopHeartbeat();
       this.rejectAllPending("Connection closed");
       if (!handshakeDone) {
         handshakeDone = true;
@@ -513,6 +520,40 @@ export class GatewayClient {
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
+    }
+  }
+
+  private startHeartbeat(ws: WebSocket): void {
+    this.stopHeartbeat();
+    this.heartbeatInterval = setInterval(() => {
+      if (ws.readyState !== WebSocket.OPEN) {
+        this.stopHeartbeat();
+        return;
+      }
+      ws.ping();
+      this.heartbeatTimeout = setTimeout(() => {
+        // No pong received — assume dead connection
+        this.stopHeartbeat();
+        ws.terminate();
+      }, HEARTBEAT_TIMEOUT_MS);
+    }, HEARTBEAT_INTERVAL_MS);
+
+    ws.on("pong", () => {
+      if (this.heartbeatTimeout) {
+        clearTimeout(this.heartbeatTimeout);
+        this.heartbeatTimeout = null;
+      }
+    });
+  }
+
+  private stopHeartbeat(): void {
+    if (this.heartbeatInterval) {
+      clearInterval(this.heartbeatInterval);
+      this.heartbeatInterval = null;
+    }
+    if (this.heartbeatTimeout) {
+      clearTimeout(this.heartbeatTimeout);
+      this.heartbeatTimeout = null;
     }
   }
 

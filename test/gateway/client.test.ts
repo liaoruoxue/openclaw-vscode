@@ -592,4 +592,70 @@ describe("GatewayClient", () => {
       expect(session).toEqual({ key: "new-session", agent: "coder" });
     });
   });
+
+  describe("heartbeat", () => {
+    it("should send ping after heartbeat interval", async () => {
+      const connectPromise = client.connect("ws://localhost:8080");
+      const ws = wsFactory.latest!;
+
+      let pingSent = false;
+      ws.on("ping_sent", () => { pingSent = true; });
+
+      simulateHandshake(ws);
+      await connectPromise;
+
+      expect(pingSent).toBe(false);
+      vi.advanceTimersByTime(30_000);
+      expect(pingSent).toBe(true);
+    });
+
+    it("should not terminate if pong received in time", async () => {
+      const connectPromise = client.connect("ws://localhost:8080");
+      const ws = wsFactory.latest!;
+      simulateHandshake(ws);
+      await connectPromise;
+
+      // Trigger ping
+      vi.advanceTimersByTime(30_000);
+      // Simulate pong before timeout
+      ws.simulatePong();
+      // Advance past the pong timeout window — should NOT terminate
+      vi.advanceTimersByTime(10_000);
+
+      expect(ws.readyState).toBe(1); // OPEN
+    });
+
+    it("should terminate connection if no pong received", async () => {
+      const connectPromise = client.connect("ws://localhost:8080");
+      const ws = wsFactory.latest!;
+      simulateHandshake(ws);
+      await connectPromise;
+
+      const states: string[] = [];
+      client.onStateChange((s) => states.push(s));
+
+      // Trigger ping
+      vi.advanceTimersByTime(30_000);
+      // Do NOT send pong — advance past timeout
+      vi.advanceTimersByTime(10_100);
+
+      expect(ws.readyState).toBe(3); // CLOSED (terminated)
+    });
+
+    it("should stop heartbeat on disconnect", async () => {
+      const connectPromise = client.connect("ws://localhost:8080");
+      const ws = wsFactory.latest!;
+
+      let pingCount = 0;
+      ws.on("ping_sent", () => { pingCount++; });
+
+      simulateHandshake(ws);
+      await connectPromise;
+
+      client.disconnect();
+
+      vi.advanceTimersByTime(60_000);
+      expect(pingCount).toBe(0);
+    });
+  });
 });

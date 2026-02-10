@@ -46,11 +46,27 @@ export class MockWebSocket extends EventEmitter {
     this.emit("error", error);
   }
 
+  /** Simulate receiving a pong from the server */
+  simulatePong(): void {
+    this.emit("pong");
+  }
+
   send(data: string): void {
     if (this.readyState !== MockWebSocket.OPEN) {
       throw new Error("WebSocket is not open");
     }
     this.sent.push(data);
+  }
+
+  ping(): void {
+    // In real ws, this sends a protocol-level ping frame.
+    // We track it so tests can simulate pong responses.
+    this.emit("ping_sent");
+  }
+
+  terminate(): void {
+    this.readyState = MockWebSocket.CLOSED;
+    this.emit("close", 1006, "Connection terminated");
   }
 
   close(code?: number, reason?: string): void {

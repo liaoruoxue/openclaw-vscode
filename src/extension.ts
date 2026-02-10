@@ -55,6 +55,25 @@ function updateStatusBar(state: ConnectionState): void {
     state === "connected" ? "openclaw.disconnect" : "openclaw.connect";
 }
 
+export function validateGatewayUrl(url: string): string | null {
+  if (!url) return "Gateway URL is empty";
+  if (url.startsWith("http://")) {
+    return `URL uses http:// — did you mean ws://${url.slice(7)}?`;
+  }
+  if (url.startsWith("https://")) {
+    return `URL uses https:// — did you mean wss://${url.slice(8)}?`;
+  }
+  if (!url.startsWith("ws://") && !url.startsWith("wss://")) {
+    return `URL must start with ws:// or wss:// (got: ${url})`;
+  }
+  try {
+    new URL(url);
+  } catch {
+    return `Invalid URL format: ${url}`;
+  }
+  return null;
+}
+
 export function activate(context: vscode.ExtensionContext) {
   const config = vscode.workspace.getConfiguration("openclaw");
   bridge = new VSCodeBridge();
@@ -121,6 +140,12 @@ export function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(
     vscode.commands.registerCommand("openclaw.connect", async () => {
       const url = config.get<string>("gateway.url", "ws://127.0.0.1:18789");
+      const validationError = validateGatewayUrl(url);
+      if (validationError) {
+        log(`URL validation failed: ${validationError}`);
+        vscode.window.showErrorMessage(`OpenClaw: ${validationError}`);
+        return;
+      }
       const token = config.get<string>("gateway.token", "");
       const deviceKeys = getOrCreateDeviceKeys(context.globalState);
       log(`Connecting to ${url}`);
