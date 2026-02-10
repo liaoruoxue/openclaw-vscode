@@ -338,11 +338,13 @@ function StatusBar({
   sessions,
   currentSession,
   onSwitchSession,
+  onCreateSession,
 }: {
   connectionState: ConnectionState;
   sessions: Session[];
   currentSession: string | null;
   onSwitchSession: (key: string) => void;
+  onCreateSession: () => void;
 }) {
   const stateColors: Record<ConnectionState, string> = {
     connected: "#4caf50",
@@ -395,6 +397,25 @@ function StatusBar({
           ))}
         </select>
       )}
+      <button
+        onClick={onCreateSession}
+        disabled={connectionState !== "connected"}
+        title="New session"
+        style={{
+          marginLeft: sessions.length > 0 ? 0 : "auto",
+          background: "none",
+          border: "1px solid var(--vscode-panel-border, #444)",
+          borderRadius: 3,
+          color: "var(--vscode-foreground, #ccc)",
+          cursor: connectionState === "connected" ? "pointer" : "default",
+          opacity: connectionState === "connected" ? 1 : 0.4,
+          fontSize: 14,
+          lineHeight: 1,
+          padding: "1px 5px",
+        }}
+      >
+        +
+      </button>
     </div>
   );
 }
@@ -534,6 +555,15 @@ function App() {
           setStreaming(false);
           toolCallMapRef.current.clear();
           break;
+
+        case "session_created": {
+          const session = msg.session as Session;
+          setSessions((prev) => [...prev, session]);
+          setCurrentSession(session.key);
+          setMessages([]);
+          toolCallMapRef.current.clear();
+          break;
+        }
       }
     };
 
@@ -564,6 +594,10 @@ function App() {
     vscode.postMessage({ type: "switch_session", key });
   };
 
+  const handleCreateSession = () => {
+    vscode.postMessage({ type: "create_session" });
+  };
+
   const isDisabled = connectionState !== "connected";
 
   return (
@@ -582,6 +616,7 @@ function App() {
         sessions={sessions}
         currentSession={currentSession}
         onSwitchSession={handleSwitchSession}
+        onCreateSession={handleCreateSession}
       />
       <MessageList messages={messages} streaming={streaming} />
       <InputBar

@@ -5,6 +5,8 @@ import { MessageRouter } from "./gateway/router";
 import { ChatProvider } from "./vscode/chatProvider";
 import { CanvasPanel } from "./vscode/canvasPanel";
 import { VSCodeBridge } from "./vscode/bridge";
+import { initLogger, log, disposeLogger } from "./vscode/logger";
+import type { ConnectionState } from "./gateway/types";
 
 const DEVICE_KEYS_KEY = "openclaw.deviceKeys";
 
@@ -27,11 +29,55 @@ function getOrCreateDeviceKeys(globalState: vscode.Memento): DeviceKeys {
 
 let gatewayClient: GatewayClient;
 let bridge: VSCodeBridge;
+let statusBarItem: vscode.StatusBarItem;
+
+const STATE_ICONS: Record<ConnectionState, string> = {
+  connected: "$(pass-filled)",
+  connecting: "$(sync~spin)",
+  disconnected: "$(circle-outline)",
+  error: "$(error)",
+};
+
+const STATE_COLORS: Record<ConnectionState, string | undefined> = {
+  connected: undefined,
+  connecting: undefined,
+  disconnected: undefined,
+  error: "statusBarItem.errorBackground",
+};
+
+function updateStatusBar(state: ConnectionState): void {
+  statusBarItem.text = `${STATE_ICONS[state]} OpenClaw`;
+  statusBarItem.tooltip = `OpenClaw: ${state}`;
+  statusBarItem.backgroundColor = STATE_COLORS[state]
+    ? new vscode.ThemeColor(STATE_COLORS[state]!)
+    : undefined;
+  statusBarItem.command =
+    state === "connected" ? "openclaw.disconnect" : "openclaw.connect";
+}
 
 export function activate(context: vscode.ExtensionContext) {
   const config = vscode.workspace.getConfiguration("openclaw");
   bridge = new VSCodeBridge();
   gatewayClient = new GatewayClient();
+
+  // Output Channel
+  const outputChannel = initLogger();
+  context.subscriptions.push(outputChannel);
+  log("Extension activated");
+
+  // Status Bar
+  statusBarItem = vscode.window.createStatusBarItem(
+    vscode.StatusBarAlignment.Left,
+    50
+  );
+  updateStatusBar("disconnected");
+  statusBarItem.show();
+  context.subscriptions.push(statusBarItem);
+
+  gatewayClient.onStateChange((state) => {
+    updateStatusBar(state);
+    log(`Connection state: ${state}`);
+  });
 
   // Chat Sidebar
   const chatProvider = new ChatProvider(context.extensionUri, gatewayClient);
@@ -56,10 +102,13 @@ export function activate(context: vscode.ExtensionContext) {
       const url = config.get<string>("gateway.url", "ws://127.0.0.1:18789");
       const token = config.get<string>("gateway.token", "");
       const deviceKeys = getOrCreateDeviceKeys(context.globalState);
+      log(`Connecting to ${url}`);
       try {
         await gatewayClient.connect(url, token || undefined, deviceKeys);
+        log("Connected successfully");
         vscode.window.showInformationMessage("OpenClaw: Connected to Gateway");
       } catch (err) {
+        log(`Connection failed: ${err}`);
         vscode.window.showErrorMessage(
           `OpenClaw: Connection failed — ${err}`
         );
@@ -68,6 +117,7 @@ export function activate(context: vscode.ExtensionContext) {
 
     vscode.commands.registerCommand("openclaw.disconnect", () => {
       gatewayClient.disconnect();
+      log("Disconnected");
       vscode.window.showInformationMessage("OpenClaw: Disconnected");
     }),
 
@@ -103,4 +153,5 @@ export function activate(context: vscode.ExtensionContext) {
 export function deactivate() {
   gatewayClient?.disconnect();
   bridge?.dispose();
+  disposeLogger();
 }

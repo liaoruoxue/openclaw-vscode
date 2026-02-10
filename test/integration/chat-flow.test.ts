@@ -341,4 +341,22 @@ describe("Integration: Chat Flow", () => {
     expect((messages[0] as Record<string, unknown>).content).toBe("Hello");
     expect((messages[1] as Record<string, unknown>).role).toBe("assistant");
   });
+
+  it("should create a session via session.create", async () => {
+    const ws = await connectClient();
+
+    const createPromise = client.sessionCreate("new-session", "coder");
+    const cmd = ws.sentMessages[1] as Record<string, unknown>;
+    expect(cmd.method).toBe("session.create");
+
+    ws.simulateMessage({
+      type: "res",
+      id: cmd.id,
+      ok: true,
+      payload: { key: "new-session", agent: "coder" },
+    });
+
+    const session = await createPromise;
+    expect(session).toEqual({ key: "new-session", agent: "coder" });
+  });
 });
