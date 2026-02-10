@@ -423,7 +423,10 @@ interface GatewayRequest {
 
 #### session.create（创建新会话）
 
+> **注意：** Gateway 当前不支持 `session.create` 方法（返回 "unknown method"）。会话在首次 `chat.send` 时隐式创建。客户端的"新建会话"功能仅在本地生成 `acp:<uuid>` 作为 sessionKey，不发送请求到 Gateway。
+
 ```json
+// 以下为协议预留定义，Gateway 尚未实现
 {
   "type": "req",
   "id": "cmd_5",
