@@ -574,12 +574,13 @@ Agent 生成的文本回复，以流式增量方式推送。
     "payload": {
       "type": "updateDataModel",
       "surfaceId": "s1",
-      "pointer": "/results/0",
-      "value": { "status": "done" }
+      "data": { "results": [{ "status": "done" }] }
     }
   }
 }
 ```
+
+`data` 中的字段会浅合并（shallow merge）到 Surface 的 `dataModel` 中。组件 props 中可用 `{ "$ref": "/results/0/status" }` 绑定数据模型值。
 
 #### diff — 代码变更
 

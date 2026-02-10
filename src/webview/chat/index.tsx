@@ -564,6 +564,19 @@ function App() {
           toolCallMapRef.current.clear();
           break;
         }
+
+        case "reconnected":
+          setStreaming(false);
+          setMessages((prev) => [
+            ...prev,
+            {
+              role: "assistant",
+              content:
+                "Connection restored. If your last message was interrupted, please resend it.",
+              toolCalls: [],
+            },
+          ]);
+          break;
       }
     };
 

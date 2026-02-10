@@ -92,6 +92,10 @@ export class ChatProvider implements vscode.WebviewViewProvider {
     this.postToWebview({ type: "inject_prompt", text });
   }
 
+  notifyReconnected(): void {
+    this.postToWebview({ type: "reconnected" });
+  }
+
   private postToWebview(msg: Record<string, unknown>): void {
     this.view?.webview.postMessage(msg);
   }

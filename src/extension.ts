@@ -74,9 +74,30 @@ export function activate(context: vscode.ExtensionContext) {
   statusBarItem.show();
   context.subscriptions.push(statusBarItem);
 
+  let previousState: ConnectionState = "disconnected";
+  let hasConnectedBefore = false;
+
   gatewayClient.onStateChange((state) => {
     updateStatusBar(state);
     log(`Connection state: ${state}`);
+
+    // Detect reconnection: was disconnected/error, now connected, not the first time
+    if (
+      state === "connected" &&
+      hasConnectedBefore &&
+      (previousState === "disconnected" || previousState === "error")
+    ) {
+      log("Reconnected to Gateway");
+      vscode.window.showInformationMessage(
+        "OpenClaw: Reconnected to Gateway. You may need to resend your last message."
+      );
+      chatProvider.notifyReconnected();
+    }
+
+    if (state === "connected") {
+      hasConnectedBefore = true;
+    }
+    previousState = state;
   });
 
   // Chat Sidebar
