@@ -42,6 +42,35 @@ function resolvePointer(data: Record<string, unknown>, pointer: string): unknown
   return current;
 }
 
+function setByPointer(
+  data: Record<string, unknown>,
+  pointer: string,
+  value: unknown
+): Record<string, unknown> {
+  if (!pointer.startsWith("/")) return data;
+  const parts = pointer.slice(1).split("/").map((p) =>
+    p.replace(/~1/g, "/").replace(/~0/g, "~")
+  );
+  if (parts.length === 0) return data;
+
+  const result = { ...data };
+  let current: Record<string, unknown> = result;
+  for (let i = 0; i < parts.length - 1; i++) {
+    const part = parts[i];
+    const existing = current[part];
+    if (existing != null && typeof existing === "object" && !Array.isArray(existing)) {
+      current[part] = { ...(existing as Record<string, unknown>) };
+    } else if (Array.isArray(existing)) {
+      current[part] = [...existing];
+    } else {
+      current[part] = {};
+    }
+    current = current[part] as Record<string, unknown>;
+  }
+  current[parts[parts.length - 1]] = value;
+  return result;
+}
+
 function resolveBoundValue(
   value: unknown,
   dataModel: Record<string, unknown>
@@ -102,10 +131,18 @@ function reduceA2UIMessage(surfaces: SurfaceMap, a2ui: Record<string, unknown>):
     case "updateDataModel": {
       const surface = next.get(a2ui.surfaceId as string);
       if (surface) {
-        next.set(a2ui.surfaceId as string, {
-          ...surface,
-          dataModel: { ...surface.dataModel, ...(a2ui.data as Record<string, unknown>) },
-        });
+        let newDataModel = { ...surface.dataModel };
+        if (a2ui.data && typeof a2ui.data === "object") {
+          newDataModel = { ...newDataModel, ...(a2ui.data as Record<string, unknown>) };
+        }
+        if (Array.isArray(a2ui.patches)) {
+          for (const patch of a2ui.patches as Array<{ pointer: string; value: unknown }>) {
+            if (patch.pointer) {
+              newDataModel = setByPointer(newDataModel, patch.pointer, patch.value);
+            }
+          }
+        }
+        next.set(a2ui.surfaceId as string, { ...surface, dataModel: newDataModel });
       }
       break;
     }
@@ -332,6 +369,141 @@ describe("Canvas webview A2UI handling", () => {
     it("should return undefined for unresolvable refs", () => {
       const resolved = resolveProps({ text: { $ref: "/missing" } }, {});
       expect(resolved.text).toBeUndefined();
+    });
+  });
+
+  describe("setByPointer", () => {
+    it("should set a top-level key", () => {
+      const result = setByPointer({ a: 1 }, "/b", 2);
+      expect(result).toEqual({ a: 1, b: 2 });
+    });
+
+    it("should set a nested key", () => {
+      const result = setByPointer({ a: { b: 1 } }, "/a/b", 99);
+      expect(result).toEqual({ a: { b: 99 } });
+    });
+
+    it("should create intermediate objects for missing paths", () => {
+      const result = setByPointer({}, "/a/b/c", "deep");
+      expect(result).toEqual({ a: { b: { c: "deep" } } });
+    });
+
+    it("should clone arrays along the path", () => {
+      const original = { items: [1, 2, 3] };
+      const result = setByPointer(original, "/items/1", 99);
+      expect(result.items).toEqual([1, 99, 3]);
+      // Original array should not be mutated
+      expect(original.items).toEqual([1, 2, 3]);
+    });
+
+    it("should handle escaped characters (~0 and ~1)", () => {
+      const result = setByPointer({}, "/a~1b/c~0d", "val");
+      expect(result).toEqual({ "a/b": { "c~d": "val" } });
+    });
+
+    it("should return data unchanged for non-pointer string", () => {
+      const data = { a: 1 };
+      expect(setByPointer(data, "noslash", 2)).toBe(data);
+    });
+
+    it("should not mutate the original object", () => {
+      const original = { a: { b: 1 }, c: 2 };
+      const result = setByPointer(original, "/a/b", 99);
+      expect(original.a.b).toBe(1);
+      expect(result.a).not.toBe(original.a);
+      expect((result.a as Record<string, unknown>).b).toBe(99);
+    });
+  });
+
+  describe("updateDataModel with patches", () => {
+    it("should apply a single patch", () => {
+      let surfaces: SurfaceMap = new Map();
+      surfaces = reduceA2UIMessage(surfaces, {
+        type: "createSurface",
+        surface: { id: "s1" },
+        dataModel: { user: { name: "Alice", age: 30 } },
+      });
+      surfaces = reduceA2UIMessage(surfaces, {
+        type: "updateDataModel",
+        surfaceId: "s1",
+        patches: [{ pointer: "/user/age", value: 31 }],
+      });
+      const dm = surfaces.get("s1")!.dataModel;
+      expect((dm.user as Record<string, unknown>).age).toBe(31);
+      expect((dm.user as Record<string, unknown>).name).toBe("Alice");
+    });
+
+    it("should apply multiple patches in order", () => {
+      let surfaces: SurfaceMap = new Map();
+      surfaces = reduceA2UIMessage(surfaces, {
+        type: "createSurface",
+        surface: { id: "s1" },
+        dataModel: { a: 1, b: 2 },
+      });
+      surfaces = reduceA2UIMessage(surfaces, {
+        type: "updateDataModel",
+        surfaceId: "s1",
+        patches: [
+          { pointer: "/a", value: 10 },
+          { pointer: "/c", value: 30 },
+        ],
+      });
+      expect(surfaces.get("s1")!.dataModel).toEqual({ a: 10, b: 2, c: 30 });
+    });
+
+    it("should combine data merge and patches", () => {
+      let surfaces: SurfaceMap = new Map();
+      surfaces = reduceA2UIMessage(surfaces, {
+        type: "createSurface",
+        surface: { id: "s1" },
+        dataModel: { x: 1, nested: { y: 2 } },
+      });
+      surfaces = reduceA2UIMessage(surfaces, {
+        type: "updateDataModel",
+        surfaceId: "s1",
+        data: { x: 10, z: 30 },
+        patches: [{ pointer: "/nested/y", value: 99 }],
+      });
+      const dm = surfaces.get("s1")!.dataModel;
+      expect(dm.x).toBe(10);
+      expect(dm.z).toBe(30);
+      expect((dm.nested as Record<string, unknown>).y).toBe(99);
+    });
+
+    it("should skip patches with empty pointer", () => {
+      let surfaces: SurfaceMap = new Map();
+      surfaces = reduceA2UIMessage(surfaces, {
+        type: "createSurface",
+        surface: { id: "s1" },
+        dataModel: { a: 1 },
+      });
+      surfaces = reduceA2UIMessage(surfaces, {
+        type: "updateDataModel",
+        surfaceId: "s1",
+        patches: [
+          { pointer: "", value: "bad" },
+          { pointer: "/a", value: 2 },
+        ],
+      });
+      expect(surfaces.get("s1")!.dataModel).toEqual({ a: 2 });
+    });
+
+    it("should create deep paths that don't exist yet", () => {
+      let surfaces: SurfaceMap = new Map();
+      surfaces = reduceA2UIMessage(surfaces, {
+        type: "createSurface",
+        surface: { id: "s1" },
+        dataModel: {},
+      });
+      surfaces = reduceA2UIMessage(surfaces, {
+        type: "updateDataModel",
+        surfaceId: "s1",
+        patches: [{ pointer: "/deeply/nested/value", value: 42 }],
+      });
+      const dm = surfaces.get("s1")!.dataModel;
+      expect(
+        ((dm.deeply as Record<string, unknown>).nested as Record<string, unknown>).value
+      ).toBe(42);
     });
   });
 

@@ -63,12 +63,37 @@ export class CanvasPanel {
   private handleWebviewMessage(msg: { type: string; [key: string]: unknown }) {
     if (msg.type === "userAction" && this.gateway) {
       const sessionKey = this.gateway.sessionKey;
+      const componentId = (msg.context as Record<string, unknown>)?.componentId as string | undefined;
       if (sessionKey) {
         this.gateway.chatSend(sessionKey, JSON.stringify({
           type: "a2ui_action",
           action: msg.action,
           context: msg.context,
-        }));
+        })).then(() => {
+          if (componentId) {
+            this.panel?.webview.postMessage({
+              type: "actionResult",
+              componentId,
+              status: "success",
+            });
+          }
+        }).catch((err) => {
+          if (componentId) {
+            this.panel?.webview.postMessage({
+              type: "actionResult",
+              componentId,
+              status: "error",
+              message: String(err),
+            });
+          }
+        });
+      } else if (componentId) {
+        this.panel?.webview.postMessage({
+          type: "actionResult",
+          componentId,
+          status: "error",
+          message: "No active session",
+        });
       }
     }
   }

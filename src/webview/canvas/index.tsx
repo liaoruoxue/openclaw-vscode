@@ -37,6 +37,36 @@ function resolvePointer(data: Record<string, unknown>, pointer: string): unknown
   return current;
 }
 
+/** Deep-set a value in a nested object by JSON Pointer path, returning a new object (immutable). */
+function setByPointer(
+  data: Record<string, unknown>,
+  pointer: string,
+  value: unknown
+): Record<string, unknown> {
+  if (!pointer.startsWith("/")) return data;
+  const parts = pointer.slice(1).split("/").map((p) =>
+    p.replace(/~1/g, "/").replace(/~0/g, "~")
+  );
+  if (parts.length === 0) return data;
+
+  const result = { ...data };
+  let current: Record<string, unknown> = result;
+  for (let i = 0; i < parts.length - 1; i++) {
+    const part = parts[i];
+    const existing = current[part];
+    if (existing != null && typeof existing === "object" && !Array.isArray(existing)) {
+      current[part] = { ...(existing as Record<string, unknown>) };
+    } else if (Array.isArray(existing)) {
+      current[part] = [...existing];
+    } else {
+      current[part] = {};
+    }
+    current = current[part] as Record<string, unknown>;
+  }
+  current[parts[parts.length - 1]] = value;
+  return result;
+}
+
 function resolveBoundValue(
   value: unknown,
   dataModel: Record<string, unknown>
@@ -71,6 +101,7 @@ type ComponentRenderer = React.FC<{
   onAction: ActionHandler;
   dataModel: Record<string, unknown>;
   id: string;
+  loading?: boolean;
 }>;
 
 const componentRegistry: Map<string, ComponentRenderer> = new Map();
@@ -92,22 +123,22 @@ registerComponent("Text", ({ props }) => (
 ));
 
 // Button
-registerComponent("Button", ({ props, onAction, id }) => (
+registerComponent("Button", ({ props, onAction, id, loading }) => (
   <button
     onClick={() => onAction("onClick", { componentId: id })}
-    disabled={Boolean(props.disabled)}
+    disabled={Boolean(props.disabled) || loading}
     style={{
       padding: "6px 16px",
       background: "var(--vscode-button-background, #0e639c)",
       color: "var(--vscode-button-foreground, #fff)",
       border: "none",
       borderRadius: 4,
-      cursor: props.disabled ? "default" : "pointer",
-      opacity: props.disabled ? 0.5 : 1,
+      cursor: props.disabled || loading ? "default" : "pointer",
+      opacity: props.disabled || loading ? 0.5 : 1,
       ...(props.style as React.CSSProperties ?? {}),
     }}
   >
-    {String(props.label ?? "Button")}
+    {loading ? "Loading..." : String(props.label ?? "Button")}
   </button>
 ));
 
@@ -550,10 +581,12 @@ function RenderComponent({
   component,
   onAction,
   dataModel,
+  loadingComponents,
 }: {
   component: ComponentDef;
   onAction: ActionHandler;
   dataModel: Record<string, unknown>;
+  loadingComponents?: Set<string>;
 }) {
   const resolvedProps = resolveProps(component.props, dataModel);
   const Renderer = componentRegistry.get(component.type);
@@ -573,20 +606,64 @@ function RenderComponent({
       children={component.children}
       onAction={onAction}
       dataModel={dataModel}
+      loading={loadingComponents?.has(component.id)}
     />
   );
 }
 
 // --- App ---
 
+interface ActionFeedback {
+  componentId: string;
+  status: "success" | "error";
+  message?: string;
+}
+
 function App() {
   const [surfaces, setSurfaces] = React.useState<Map<string, Surface>>(
+    new Map()
+  );
+  const [loadingComponents, setLoadingComponents] = React.useState<Set<string>>(
+    new Set()
+  );
+  const [feedbacks, setFeedbacks] = React.useState<Map<string, ActionFeedback>>(
     new Map()
   );
 
   React.useEffect(() => {
     const handler = (e: MessageEvent) => {
       const msg = e.data;
+
+      // Handle action result feedback from extension
+      if (msg.type === "actionResult") {
+        const componentId = msg.componentId as string;
+        setLoadingComponents((prev) => {
+          const next = new Set(prev);
+          next.delete(componentId);
+          return next;
+        });
+        if (msg.status === "success" || msg.status === "error") {
+          setFeedbacks((prev) => {
+            const next = new Map(prev);
+            next.set(componentId, {
+              componentId,
+              status: msg.status as "success" | "error",
+              message: msg.message as string | undefined,
+            });
+            return next;
+          });
+          // Auto-clear feedback after 3s
+          setTimeout(() => {
+            setFeedbacks((prev) => {
+              const next = new Map(prev);
+              next.delete(componentId);
+              return next;
+            });
+          }, 3000);
+        }
+        return;
+      }
+
       if (msg.type !== "a2ui") return;
 
       const a2ui = msg.payload;
@@ -623,10 +700,20 @@ function App() {
             const next = new Map(prev);
             const surface = next.get(a2ui.surfaceId);
             if (surface) {
-              next.set(a2ui.surfaceId, {
-                ...surface,
-                dataModel: { ...surface.dataModel, ...a2ui.data },
-              });
+              let newDataModel = { ...surface.dataModel };
+              // Support flat merge via `data` field
+              if (a2ui.data && typeof a2ui.data === "object") {
+                newDataModel = { ...newDataModel, ...a2ui.data };
+              }
+              // Support deep pointer updates via `patches` field
+              if (Array.isArray(a2ui.patches)) {
+                for (const patch of a2ui.patches as Array<{ pointer: string; value: unknown }>) {
+                  if (patch.pointer) {
+                    newDataModel = setByPointer(newDataModel, patch.pointer, patch.value);
+                  }
+                }
+              }
+              next.set(a2ui.surfaceId, { ...surface, dataModel: newDataModel });
             }
             return next;
           });
@@ -638,6 +725,10 @@ function App() {
   }, []);
 
   const handleAction = (action: string, context: Record<string, unknown>) => {
+    const componentId = context.componentId as string | undefined;
+    if (componentId) {
+      setLoadingComponents((prev) => new Set(prev).add(componentId));
+    }
     vscode.postMessage({ type: "userAction", action, context });
   };
 
@@ -663,12 +754,29 @@ function App() {
             </h2>
           )}
           {surface.components.map((comp) => (
-            <RenderComponent
-              key={comp.id}
-              component={comp}
-              onAction={handleAction}
-              dataModel={surface.dataModel ?? {}}
-            />
+            <div key={comp.id}>
+              <RenderComponent
+                component={comp}
+                onAction={handleAction}
+                dataModel={surface.dataModel ?? {}}
+                loadingComponents={loadingComponents}
+              />
+              {feedbacks.has(comp.id) && (
+                <div
+                  style={{
+                    fontSize: 11,
+                    padding: "2px 6px",
+                    marginTop: 2,
+                    color: feedbacks.get(comp.id)!.status === "error"
+                      ? "var(--vscode-errorForeground, #f44)"
+                      : "var(--vscode-testing-iconPassed, #4caf50)",
+                  }}
+                >
+                  {feedbacks.get(comp.id)!.message ??
+                    (feedbacks.get(comp.id)!.status === "error" ? "Action failed" : "Done")}
+                </div>
+              )}
+            </div>
           ))}
         </div>
       ))}
