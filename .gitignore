@@ -1,0 +1,27 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# VS Code extension package
+*.vsix
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Claude Code local settings & memory (per-developer)
+.claude/
+
+# Test keys and secrets
+scripts/.gateway-test-keys.json
+
+# Editor settings (per-developer)
+.vscode/
+
+# Internal dev notes (not shipped)
+docs/STATUS.md
+docs/LESSONS.md
+docs/TODO.md
+docs/DEBUG.md

@@ -1,0 +1,115 @@
+{
+  "name": "openclaw",
+  "displayName": "OpenClaw",
+  "description": "OpenClaw AI Agent integration for VS Code — Chat, Canvas/A2UI, and Gateway tools in one extension.",
+  "version": "0.1.0",
+  "publisher": "openclaw-community",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.100.0"
+  },
+  "categories": ["AI", "Chat"],
+  "activationEvents": [
+    "onView:openclaw.chat"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "openclaw",
+          "title": "OpenClaw",
+          "icon": "media/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "openclaw": [
+        {
+          "type": "webview",
+          "id": "openclaw.chat",
+          "name": "Chat"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "openclaw.connect",
+        "title": "OpenClaw: Connect to Gateway"
+      },
+      {
+        "command": "openclaw.disconnect",
+        "title": "OpenClaw: Disconnect"
+      },
+      {
+        "command": "openclaw.openCanvas",
+        "title": "OpenClaw: Open Canvas"
+      },
+      {
+        "command": "openclaw.sendSelection",
+        "title": "OpenClaw: Send Selection to Agent"
+      },
+      {
+        "command": "openclaw.settings",
+        "title": "OpenClaw: Settings"
+      }
+    ],
+    "menus": {
+      "editor/context": [
+        {
+          "command": "openclaw.sendSelection",
+          "group": "openclaw"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "OpenClaw",
+      "properties": {
+        "openclaw.gateway.url": {
+          "type": "string",
+          "default": "ws://127.0.0.1:18789",
+          "description": "OpenClaw Gateway WebSocket URL"
+        },
+        "openclaw.gateway.token": {
+          "type": "string",
+          "default": "",
+          "description": "Gateway authentication token"
+        },
+        "openclaw.session.defaultAgent": {
+          "type": "string",
+          "default": "main",
+          "description": "Default agent name for new sessions"
+        },
+        "openclaw.autoConnect": {
+          "type": "boolean",
+          "default": false,
+          "description": "Automatically connect to Gateway on startup"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "node esbuild.config.mjs",
+    "watch": "node esbuild.config.mjs --watch",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "package": "vsce package"
+  },
+  "dependencies": {
+    "marked": "^15.0.0",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@types/vscode": "^1.100.0",
+    "@types/ws": "^8.5.0",
+    "esbuild": "^0.25.0",
+    "jsdom": "^26.0.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0"
+  }
+}
