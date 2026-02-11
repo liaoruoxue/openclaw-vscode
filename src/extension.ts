@@ -92,6 +92,7 @@ export function activate(context: vscode.ExtensionContext) {
 
   // Chat Sidebar
   const chatProvider = new ChatProvider(context.extensionUri, gatewayClient);
+  chatProvider.setLogger(log);
   context.subscriptions.push(
     vscode.window.registerWebviewViewProvider("openclaw.chat", chatProvider, {
       webviewOptions: { retainContextWhenHidden: true },
@@ -207,6 +208,7 @@ export function activate(context: vscode.ExtensionContext) {
 
   // Message Router
   const router = new MessageRouter(chatProvider, canvasPanel, bridge);
+  router.setLogger(log);
   chatProvider.setOnNewRun(() => router.resetSequence());
   gatewayClient.onEvent((event) => {
     router.route(event);

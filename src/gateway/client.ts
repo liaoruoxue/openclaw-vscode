@@ -432,13 +432,9 @@ export class GatewayClient {
             }
           } else if (p?.kind != null) {
             // Already-translated agent events (tool_start, tool_result, diff, done, etc.)
-            this._log(`[gateway] Agent event: kind=${p.kind} seq=${seq}`);
             this.emit(parsed as unknown as GatewayEvent);
-          } else {
-            // Log dropped agent events for debugging
-            const keys = p ? Object.keys(p).join(",") : "(null)";
-            this._log(`[gateway] Dropped agent event: keys=[${keys}] seq=${seq}`);
           }
+          // Silently drop agent lifecycle events (no stream, no kind) and health/tick
 
         } else if (eventName === "chat") {
           // Chat events are batched — only use for final/error/aborted status.

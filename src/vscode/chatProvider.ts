@@ -46,6 +46,7 @@ export class ChatProvider implements vscode.WebviewViewProvider {
   private currentRunId: string | null = null;
   private currentSessionKey: string | null = null;
   private onNewRun: (() => void) | null = null;
+  private _log: (msg: string) => void = () => {};
 
   constructor(
     private extensionUri: vscode.Uri,
@@ -55,6 +56,10 @@ export class ChatProvider implements vscode.WebviewViewProvider {
     this.gateway.onStateChange((state) => {
       this.postToWebview({ type: "connection_state", state });
     });
+  }
+
+  setLogger(fn: (msg: string) => void): void {
+    this._log = fn;
   }
 
   resolveWebviewView(
@@ -85,6 +90,9 @@ export class ChatProvider implements vscode.WebviewViewProvider {
   }
 
   postEvent(event: AgentEventPayload): void {
+    if (event.kind !== "text_delta") {
+      this._log(`[chat] postEvent kind=${event.kind}`);
+    }
     this.view?.webview.postMessage(event);
     if (event.kind === "done") {
       this.currentRunId = null;

@@ -24,6 +24,7 @@ export interface BridgeTarget {
 
 export class MessageRouter {
   private lastSeq = -1;
+  private _log: (msg: string) => void = () => {};
 
   constructor(
     private chat: ChatTarget,
@@ -31,10 +32,15 @@ export class MessageRouter {
     private bridge: BridgeTarget
   ) {}
 
+  setLogger(fn: (msg: string) => void): void {
+    this._log = fn;
+  }
+
   route(event: GatewayEvent): void {
     // Track sequence numbers for ordering if provided
     if (event.seq !== undefined) {
       if (event.seq <= this.lastSeq) {
+        this._log(`[router] Dropped seq=${event.seq} (lastSeq=${this.lastSeq}) kind=${event.payload?.kind}`);
         return; // Drop duplicate / out-of-order events
       }
       this.lastSeq = event.seq;

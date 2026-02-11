@@ -518,7 +518,7 @@ function InputBar({
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === "Enter" && !e.shiftKey) {
+    if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
       e.preventDefault();
       handleSend();
     }
@@ -817,6 +817,12 @@ function App() {
 
         case "connection_state":
           setConnectionState(msg.state as ConnectionState);
+          // If connection drops while streaming, unstick the UI
+          if (msg.state === "disconnected" || msg.state === "error") {
+            if (streaming) {
+              setStreaming(false);
+            }
+          }
           break;
 
         case "sessions":
