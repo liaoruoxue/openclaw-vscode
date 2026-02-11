@@ -13,6 +13,7 @@
     "Chat"
   ],
   "activationEvents": [
+    "onStartupFinished",
     "onView:openclaw.chat"
   ],
   "main": "./dist/extension.js",
@@ -31,7 +32,8 @@
         {
           "type": "webview",
           "id": "openclaw.chat",
-          "name": "Chat"
+          "name": "Chat",
+          "visibility": "visible"
         }
       ]
     },

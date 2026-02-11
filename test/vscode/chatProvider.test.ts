@@ -18,6 +18,7 @@ describe("transformHistoryMessage", () => {
       role: "user",
       content: "Hello world",
       toolCalls: [],
+      diffs: [],
     });
   });
 
@@ -32,6 +33,7 @@ describe("transformHistoryMessage", () => {
       role: "assistant",
       content: "Here is the answer.",
       toolCalls: [],
+      diffs: [],
     });
   });
 

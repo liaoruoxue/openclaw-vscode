@@ -90,6 +90,14 @@ export function activate(context: vscode.ExtensionContext) {
   gatewayClient.setLogger(log);
   log("Extension activated");
 
+  // Chat Sidebar
+  const chatProvider = new ChatProvider(context.extensionUri, gatewayClient);
+  context.subscriptions.push(
+    vscode.window.registerWebviewViewProvider("openclaw.chat", chatProvider, {
+      webviewOptions: { retainContextWhenHidden: true },
+    })
+  );
+
   // Status Bar
   statusBarItem = vscode.window.createStatusBarItem(
     vscode.StatusBarAlignment.Left,
@@ -113,9 +121,7 @@ export function activate(context: vscode.ExtensionContext) {
       (previousState === "disconnected" || previousState === "error")
     ) {
       log("Reconnected to Gateway");
-      vscode.window.showInformationMessage(
-        "OpenClaw: Reconnected to Gateway. You may need to resend your last message."
-      );
+      vscode.window.setStatusBarMessage("$(check) OpenClaw: Reconnected", 1500);
       chatProvider.notifyReconnected();
     }
 
@@ -124,12 +130,6 @@ export function activate(context: vscode.ExtensionContext) {
     }
     previousState = state;
   });
-
-  // Chat Sidebar
-  const chatProvider = new ChatProvider(context.extensionUri, gatewayClient);
-  context.subscriptions.push(
-    vscode.window.registerWebviewViewProvider("openclaw.chat", chatProvider)
-  );
 
   // Canvas Panel
   const canvasPanel = new CanvasPanel(context.extensionUri);
@@ -228,7 +228,6 @@ export function activate(context: vscode.ExtensionContext) {
         .update(Buffer.from(deviceKeys.publicKey, "hex"))
         .digest("hex");
       log(`Connecting to ${url} (device: ${deviceId})`);
-      vscode.window.showInformationMessage(`Device ID: ${deviceId}`);
       try {
         await gatewayClient.connect(url, token || undefined, deviceKeys);
         log("Operator connection established");
@@ -239,7 +238,7 @@ export function activate(context: vscode.ExtensionContext) {
         } catch (nodeErr) {
           log(`Node connection failed: ${nodeErr}`);
         }
-        vscode.window.showInformationMessage("OpenClaw: Connected to Gateway");
+        vscode.window.setStatusBarMessage("$(check) OpenClaw: Connected", 1500);
       } catch (err) {
         log(`Connection failed: ${err}`);
         vscode.window.showErrorMessage(
@@ -252,7 +251,7 @@ export function activate(context: vscode.ExtensionContext) {
       gatewayClient.disconnect();
       nodeConnection.disconnect();
       log("Disconnected");
-      vscode.window.showInformationMessage("OpenClaw: Disconnected");
+      vscode.window.setStatusBarMessage("$(circle-outline) OpenClaw: Disconnected", 1500);
     }),
 
     vscode.commands.registerCommand("openclaw.openCanvas", () => {
@@ -269,8 +268,32 @@ export function activate(context: vscode.ExtensionContext) {
       }
       const filePath = editor.document.uri.fsPath;
       const lang = editor.document.languageId;
-      const prompt = `Here is code from \`${filePath}\` (${lang}):\n\`\`\`${lang}\n${selection}\n\`\`\``;
-      chatProvider.sendPrompt(prompt);
+      const startLine = editor.selection.start.line + 1;
+      const endLine = editor.selection.end.line + 1;
+      const lineRange = startLine === endLine ? `L${startLine}` : `L${startLine}-${endLine}`;
+      const codeBlock = `\`${filePath}\` (${lang}, ${lineRange}):\n\`\`\`${lang}\n${selection}\n\`\`\``;
+
+      const actions = [
+        { label: "Review", prompt: `Review the following code for issues, readability, and best practices.\n\n${codeBlock}` },
+        { label: "Refactor", prompt: `Refactor the following code to improve clarity and maintainability.\n\n${codeBlock}` },
+        { label: "Add Tests", prompt: `Write unit tests for the following code.\n\n${codeBlock}` },
+        { label: "Explain", prompt: `Explain the following code in detail.\n\n${codeBlock}` },
+        { label: "Find Bugs", prompt: `Find potential bugs or edge cases in the following code.\n\n${codeBlock}` },
+        { label: "Custom...", prompt: "" },
+      ];
+
+      const pick = await vscode.window.showQuickPick(
+        actions.map((a) => a.label),
+        { placeHolder: "What would you like to do with this code?" }
+      );
+      if (!pick) return;
+
+      const action = actions.find((a) => a.label === pick)!;
+      if (pick === "Custom...") {
+        chatProvider.sendPrompt(codeBlock);
+      } else {
+        chatProvider.sendAndExecute(action.prompt);
+      }
     }),
 
     vscode.commands.registerCommand("openclaw.settings", () => {

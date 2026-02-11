@@ -2,6 +2,13 @@ import * as vscode from "vscode";
 import type { GatewayClient } from "../gateway/client";
 import type { AgentEventPayload, ConnectionState, Session } from "../gateway/types";
 
+const LANG_ALIASES: Record<string, string> = {
+  sh: "shellscript", bash: "shellscript",
+  js: "javascript", ts: "typescript",
+  tsx: "typescriptreact", jsx: "javascriptreact",
+  py: "python", rb: "ruby", yml: "yaml", md: "markdown",
+};
+
 function extractText(content: unknown): string {
   if (typeof content === "string") return content;
   if (Array.isArray(content)) {
@@ -31,7 +38,7 @@ export function transformHistoryMessage(raw: unknown): Record<string, unknown> {
       }
     }
   }
-  return { role, content, toolCalls };
+  return { role, content, toolCalls, diffs: [] };
 }
 
 export class ChatProvider implements vscode.WebviewViewProvider {
@@ -90,6 +97,25 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 
   sendPrompt(text: string): void {
     this.postToWebview({ type: "inject_prompt", text });
+  }
+
+  async sendAndExecute(text: string): Promise<void> {
+    // Show the message in the webview, then send to Gateway
+    this.postToWebview({ type: "inject_and_send", text });
+    const sessionKey =
+      this.currentSessionKey ??
+      this.gateway.sessionKey ??
+      `acp:${crypto.randomUUID()}`;
+    this.currentSessionKey = sessionKey;
+    try {
+      const { runId } = await this.gateway.chatSend(sessionKey, text);
+      this.currentRunId = runId;
+    } catch (err) {
+      this.postToWebview({
+        type: "error",
+        message: `Failed to send: ${err}`,
+      });
+    }
   }
 
   notifyReconnected(): void {
@@ -159,6 +185,30 @@ export class ChatProvider implements vscode.WebviewViewProvider {
         this.postToWebview({ type: "session_created", session: { key } });
         break;
       }
+      case "openInEditor": {
+        const lang = msg.language as string | undefined;
+        const doc = await vscode.workspace.openTextDocument({
+          content: msg.code as string,
+          language: LANG_ALIASES[lang ?? ""] ?? lang ?? undefined,
+        });
+        await vscode.window.showTextDocument(doc);
+        break;
+      }
+      case "applyDiff": {
+        const workspacePath = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+        const rawPath = msg.path as string;
+        const fullPath = rawPath.startsWith("/")
+          ? rawPath
+          : `${workspacePath}/${rawPath}`;
+        await vscode.workspace.fs.writeFile(
+          vscode.Uri.file(fullPath),
+          new TextEncoder().encode(msg.content as string)
+        );
+        vscode.window.setStatusBarMessage(`$(check) Applied: ${rawPath}`, 1500);
+        break;
+      }
+      case "rejectDiff":
+        break;
     }
   }
 
@@ -190,6 +240,8 @@ export class ChatProvider implements vscode.WebviewViewProvider {
 </head>
 <body>
   <style>
+    html, body { margin: 0; padding: 0; height: 100%; }
+    #root { position: absolute; inset: 0; overflow: hidden; }
     .markdown-content { line-height: 1.6; }
     .markdown-content p { margin: 0.5em 0; }
     .markdown-content p:first-child { margin-top: 0; }

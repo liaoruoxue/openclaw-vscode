@@ -27,10 +27,19 @@ interface ToolCall {
   done: boolean;
 }
 
+interface DiffInfo {
+  id: string;
+  path: string;
+  original: string | null;
+  modified: string;
+  status: "pending" | "accepted" | "rejected";
+}
+
 interface ChatMessage {
   role: "user" | "assistant";
   content: string;
   toolCalls: ToolCall[];
+  diffs: DiffInfo[];
 }
 
 // --- ToolCallView ---
@@ -182,45 +191,164 @@ function useCopyFeedback(): [string | null, (text: string) => void] {
   return [copied, copy];
 }
 
+// --- DiffBlock ---
+
+function DiffBlock({
+  diff,
+  onAccept,
+  onReject,
+}: {
+  diff: DiffInfo;
+  onAccept: (diff: DiffInfo) => void;
+  onReject: (diff: DiffInfo) => void;
+}) {
+  const isNewFile = diff.original === null;
+  const statusColors = {
+    pending: "var(--vscode-panel-border, #555)",
+    accepted: "#4caf50",
+    rejected: "#f44336",
+  };
+  const statusLabels = {
+    pending: isNewFile ? "New file" : "Modified",
+    accepted: "Accepted",
+    rejected: "Rejected",
+  };
+
+  return (
+    <div
+      style={{
+        margin: "4px 0",
+        border: `1px solid ${statusColors[diff.status]}`,
+        borderRadius: 4,
+        overflow: "hidden",
+      }}
+    >
+      <div
+        style={{
+          padding: "4px 8px",
+          display: "flex",
+          alignItems: "center",
+          gap: 6,
+          background: "var(--vscode-editor-inactiveSelectionBackground, #264f78)",
+          fontSize: 12,
+        }}
+      >
+        <span style={{ fontFamily: "monospace", opacity: 0.7 }}>
+          {isNewFile ? "+" : "~"}
+        </span>
+        <span style={{ fontWeight: 600, flex: 1 }}>{diff.path}</span>
+        <span
+          style={{
+            fontSize: 11,
+            color: statusColors[diff.status],
+            marginRight: 4,
+          }}
+        >
+          {statusLabels[diff.status]}
+        </span>
+        {diff.status === "pending" && (
+          <>
+            <button
+              onClick={() => onAccept(diff)}
+              style={{
+                background: "#4caf50",
+                color: "#fff",
+                border: "none",
+                borderRadius: 3,
+                padding: "1px 8px",
+                fontSize: 11,
+                cursor: "pointer",
+              }}
+            >
+              Accept
+            </button>
+            <button
+              onClick={() => onReject(diff)}
+              style={{
+                background: "none",
+                border: "1px solid var(--vscode-panel-border, #555)",
+                borderRadius: 3,
+                color: "var(--vscode-foreground, #ccc)",
+                padding: "1px 8px",
+                fontSize: 11,
+                cursor: "pointer",
+              }}
+            >
+              Reject
+            </button>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // --- MessageBubble ---
 
 function MessageBubble({
   message,
   onResend,
+  onAcceptDiff,
+  onRejectDiff,
 }: {
   message: ChatMessage;
   onResend?: (text: string) => void;
+  onAcceptDiff: (diff: DiffInfo) => void;
+  onRejectDiff: (diff: DiffInfo) => void;
 }) {
   const isUser = message.role === "user";
   const [hovered, setHovered] = React.useState(false);
   const [copied, copy] = useCopyFeedback();
   const contentRef = React.useRef<HTMLDivElement>(null);
 
-  // Attach copy buttons to code blocks in rendered markdown
+  // Attach copy + open-in-editor buttons to code blocks in rendered markdown
   React.useEffect(() => {
     if (isUser || !contentRef.current) return;
     const pres = contentRef.current.querySelectorAll("pre");
     pres.forEach((pre) => {
-      if (pre.querySelector(".code-copy-btn")) return;
-      const btn = document.createElement("button");
-      btn.className = "code-copy-btn";
-      btn.textContent = "Copy";
-      btn.title = "Copy code";
-      btn.addEventListener("click", () => {
-        const code = pre.querySelector("code")?.textContent ?? pre.textContent ?? "";
+      if (pre.querySelector(".code-btn-container")) return;
+
+      const codeEl = pre.querySelector("code");
+      const code = codeEl?.textContent ?? pre.textContent ?? "";
+      // Extract language from class like "language-typescript"
+      const langClass = Array.from(codeEl?.classList ?? []).find((c) => c.startsWith("language-"));
+      const language = langClass?.replace("language-", "") ?? "";
+
+      const container = document.createElement("div");
+      container.className = "code-btn-container";
+      container.style.cssText =
+        "position:absolute;top:4px;right:4px;display:flex;gap:4px;opacity:0;transition:opacity 0.15s;";
+
+      const btnStyle =
+        "background:var(--vscode-button-secondaryBackground,#444);" +
+        "color:var(--vscode-button-secondaryForeground,#ccc);border:none;border-radius:3px;" +
+        "padding:2px 8px;font-size:11px;cursor:pointer;";
+
+      const copyBtn = document.createElement("button");
+      copyBtn.textContent = "Copy";
+      copyBtn.title = "Copy code";
+      copyBtn.style.cssText = btnStyle;
+      copyBtn.addEventListener("click", () => {
         navigator.clipboard.writeText(code).then(() => {
-          btn.textContent = "Copied!";
-          setTimeout(() => { btn.textContent = "Copy"; }, 1500);
+          copyBtn.textContent = "Copied!";
+          setTimeout(() => { copyBtn.textContent = "Copy"; }, 1500);
         });
       });
+
+      const openBtn = document.createElement("button");
+      openBtn.textContent = "Open";
+      openBtn.title = "Open in editor";
+      openBtn.style.cssText = btnStyle;
+      openBtn.addEventListener("click", () => {
+        vscode.postMessage({ type: "openInEditor", code, language });
+      });
+
+      container.appendChild(copyBtn);
+      container.appendChild(openBtn);
       pre.style.position = "relative";
-      btn.style.cssText =
-        "position:absolute;top:4px;right:4px;background:var(--vscode-button-secondaryBackground,#444);" +
-        "color:var(--vscode-button-secondaryForeground,#ccc);border:none;border-radius:3px;" +
-        "padding:2px 8px;font-size:11px;cursor:pointer;opacity:0;transition:opacity 0.15s;";
-      pre.appendChild(btn);
-      pre.addEventListener("mouseenter", () => { btn.style.opacity = "1"; });
-      pre.addEventListener("mouseleave", () => { btn.style.opacity = "0"; });
+      pre.appendChild(container);
+      pre.addEventListener("mouseenter", () => { container.style.opacity = "1"; });
+      pre.addEventListener("mouseleave", () => { container.style.opacity = "0"; });
     });
   }, [message.content, isUser]);
 
@@ -291,6 +419,18 @@ function MessageBubble({
           ))}
         </div>
       )}
+      {message.diffs.length > 0 && (
+        <div style={{ marginTop: 4 }}>
+          {message.diffs.map((d) => (
+            <DiffBlock
+              key={d.id}
+              diff={d}
+              onAccept={onAcceptDiff}
+              onReject={onRejectDiff}
+            />
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -301,10 +441,14 @@ function MessageList({
   messages,
   streaming,
   onResend,
+  onAcceptDiff,
+  onRejectDiff,
 }: {
   messages: ChatMessage[];
   streaming: boolean;
   onResend: (text: string) => void;
+  onAcceptDiff: (diff: DiffInfo) => void;
+  onRejectDiff: (diff: DiffInfo) => void;
 }) {
   const endRef = React.useRef<HTMLDivElement>(null);
 
@@ -320,7 +464,13 @@ function MessageList({
         </div>
       )}
       {messages.map((m, i) => (
-        <MessageBubble key={i} message={m} onResend={onResend} />
+        <MessageBubble
+          key={i}
+          message={m}
+          onResend={onResend}
+          onAcceptDiff={onAcceptDiff}
+          onRejectDiff={onRejectDiff}
+        />
       ))}
       {streaming && (
         <div style={{ opacity: 0.5, fontSize: 12, padding: "0 10px" }}>
@@ -564,7 +714,7 @@ function App() {
             }
             return [
               ...prev,
-              { role: "assistant", content: msg.content, toolCalls: [] },
+              { role: "assistant", content: msg.content, toolCalls: [], diffs: [] },
             ];
           });
           break;
@@ -591,7 +741,7 @@ function App() {
             }
             return [
               ...prev,
-              { role: "assistant", content: "", toolCalls: [tc] },
+              { role: "assistant", content: "", toolCalls: [tc], diffs: [] },
             ];
           });
           break;
@@ -623,6 +773,31 @@ function App() {
           break;
         }
 
+        case "diff": {
+          setStreaming(true);
+          const diffInfo: DiffInfo = {
+            id: crypto.randomUUID(),
+            path: msg.path as string,
+            original: (msg.original as string | null) ?? null,
+            modified: msg.modified as string,
+            status: "pending",
+          };
+          setMessages((prev) => {
+            const last = prev[prev.length - 1];
+            if (last?.role === "assistant") {
+              return [
+                ...prev.slice(0, -1),
+                { ...last, diffs: [...last.diffs, diffInfo] },
+              ];
+            }
+            return [
+              ...prev,
+              { role: "assistant", content: "", toolCalls: [], diffs: [diffInfo] },
+            ];
+          });
+          break;
+        }
+
         case "done":
           setStreaming(false);
           toolCallMapRef.current.clear();
@@ -630,6 +805,14 @@ function App() {
 
         case "inject_prompt":
           setInjectedText(msg.text);
+          break;
+
+        case "inject_and_send":
+          setMessages((prev) => [
+            ...prev,
+            { role: "user", content: msg.text, toolCalls: [], diffs: [] },
+          ]);
+          setStreaming(true);
           break;
 
         case "connection_state":
@@ -648,6 +831,7 @@ function App() {
               role: "assistant",
               content: `Error: ${msg.message}`,
               toolCalls: [],
+              diffs: [],
             },
           ]);
           break;
@@ -684,6 +868,7 @@ function App() {
               content:
                 "Connection restored. If your last message was interrupted, please resend it.",
               toolCalls: [],
+              diffs: [],
             },
           ]);
           break;
@@ -699,7 +884,7 @@ function App() {
   const handleSend = (text: string) => {
     setMessages((prev) => [
       ...prev,
-      { role: "user", content: text, toolCalls: [] },
+      { role: "user", content: text, toolCalls: [], diffs: [] },
     ]);
     vscode.postMessage({ type: "send", text });
     setStreaming(true);
@@ -721,6 +906,35 @@ function App() {
     vscode.postMessage({ type: "create_session" });
   };
 
+  const handleAcceptDiff = (diff: DiffInfo) => {
+    vscode.postMessage({
+      type: "applyDiff",
+      path: diff.path,
+      content: diff.modified,
+      isNewFile: diff.original === null,
+    });
+    setMessages((prev) =>
+      prev.map((m) => ({
+        ...m,
+        diffs: m.diffs.map((d) =>
+          d.id === diff.id ? { ...d, status: "accepted" as const } : d
+        ),
+      }))
+    );
+  };
+
+  const handleRejectDiff = (diff: DiffInfo) => {
+    vscode.postMessage({ type: "rejectDiff", path: diff.path });
+    setMessages((prev) =>
+      prev.map((m) => ({
+        ...m,
+        diffs: m.diffs.map((d) =>
+          d.id === diff.id ? { ...d, status: "rejected" as const } : d
+        ),
+      }))
+    );
+  };
+
   const isDisabled = connectionState !== "connected";
 
   return (
@@ -728,7 +942,7 @@ function App() {
       style={{
         display: "flex",
         flexDirection: "column",
-        height: "100vh",
+        height: "100%",
         color: "var(--vscode-foreground, #ccc)",
         fontFamily: "var(--vscode-font-family, sans-serif)",
         fontSize: "var(--vscode-font-size, 13px)",
@@ -741,7 +955,13 @@ function App() {
         onSwitchSession={handleSwitchSession}
         onCreateSession={handleCreateSession}
       />
-      <MessageList messages={messages} streaming={streaming} onResend={handleSend} />
+      <MessageList
+        messages={messages}
+        streaming={streaming}
+        onResend={handleSend}
+        onAcceptDiff={handleAcceptDiff}
+        onRejectDiff={handleRejectDiff}
+      />
       <InputBar
         streaming={streaming}
         disabled={isDisabled}
