@@ -580,8 +580,31 @@ registerComponent("Terminal", ({ props }) => (
 
 // Table
 registerComponent("Table", ({ props }) => {
-  const columns = (props.columns as Array<{ key: string; label?: string }>) ?? [];
-  const rows = (props.rows as Array<Record<string, unknown>>) ?? [];
+  // Normalize columns: support both [{key, label}] and ["col1", "col2"] formats
+  const rawCols = (props.columns ?? []) as unknown[];
+  const columns: Array<{ key: string; label: string }> = rawCols.map((c, i) => {
+    if (typeof c === "string") return { key: String(i), label: c };
+    if (c && typeof c === "object") {
+      const o = c as Record<string, unknown>;
+      const key = String(o.key ?? o.id ?? i);
+      const label = String(o.label ?? o.title ?? o.header ?? o.name ?? key);
+      return { key, label };
+    }
+    return { key: String(i), label: String(c) };
+  });
+
+  // Normalize rows: support both [{key: val}] and [["val1", "val2"]] formats
+  const rawRows = (props.rows ?? []) as unknown[];
+  const rows: Array<Record<string, unknown>> = rawRows.map((r) => {
+    if (Array.isArray(r)) {
+      // Convert array row to object using column indices as keys
+      const obj: Record<string, unknown> = {};
+      r.forEach((val, i) => { obj[String(i)] = val; });
+      return obj;
+    }
+    return (r ?? {}) as Record<string, unknown>;
+  });
+
   const striped = Boolean(props.striped);
 
   return (
@@ -605,7 +628,7 @@ registerComponent("Table", ({ props }) => {
                 fontWeight: 600,
               }}
             >
-              {col.label ?? col.key}
+              {col.label}
             </th>
           ))}
         </tr>
@@ -814,7 +837,8 @@ function RenderComponent({
   loadingComponents?: Set<string>;
 }) {
   const resolvedProps = resolveProps(component.props, dataModel);
-  const Renderer = componentRegistry.get(component.type);
+  const Renderer = componentRegistry.get(component.type)
+    ?? componentRegistry.get(component.type.charAt(0).toUpperCase() + component.type.slice(1));
 
   if (!Renderer) {
     return (

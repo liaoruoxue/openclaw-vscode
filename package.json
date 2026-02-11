@@ -8,7 +8,10 @@
   "engines": {
     "vscode": "^1.100.0"
   },
-  "categories": ["AI", "Chat"],
+  "categories": [
+    "AI",
+    "Chat"
+  ],
   "activationEvents": [
     "onView:openclaw.chat"
   ],
@@ -52,6 +55,10 @@
       {
         "command": "openclaw.settings",
         "title": "OpenClaw: Settings"
+      },
+      {
+        "command": "openclaw.devTest",
+        "title": "OpenClaw: [DEV] Test Features"
       }
     ],
     "menus": {
@@ -96,7 +103,12 @@
     "package": "vsce package"
   },
   "dependencies": {
+    "@lit-labs/signals": "^0.2.0",
+    "@lit/context": "^1.1.6",
+    "lit": "^3.3.2",
+    "markdown-it": "^14.1.0",
     "marked": "^15.0.0",
+    "signal-utils": "^0.21.1",
     "ws": "^8.18.0"
   },
   "devDependencies": {

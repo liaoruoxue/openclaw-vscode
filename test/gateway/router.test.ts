@@ -35,7 +35,7 @@ describe("MessageRouter", () => {
 
   beforeEach(() => {
     chat = { postEvent: vi.fn() };
-    canvas = { postA2UIMessage: vi.fn() };
+    canvas = { postV08Messages: vi.fn() };
     bridge = { showDiff: vi.fn() };
     router = new MessageRouter(chat, canvas, bridge);
   });
@@ -49,7 +49,7 @@ describe("MessageRouter", () => {
       router.route(makeEvent(payload));
 
       expect(chat.postEvent).toHaveBeenCalledWith(payload);
-      expect(canvas.postA2UIMessage).not.toHaveBeenCalled();
+      expect(canvas.postV08Messages).not.toHaveBeenCalled();
       expect(bridge.showDiff).not.toHaveBeenCalled();
     });
   });
@@ -65,7 +65,7 @@ describe("MessageRouter", () => {
       router.route(makeEvent(payload));
 
       expect(chat.postEvent).toHaveBeenCalledWith(payload);
-      expect(canvas.postA2UIMessage).not.toHaveBeenCalled();
+      expect(canvas.postV08Messages).not.toHaveBeenCalled();
     });
   });
 
@@ -79,7 +79,7 @@ describe("MessageRouter", () => {
       router.route(makeEvent(payload));
 
       expect(chat.postEvent).toHaveBeenCalledWith(payload);
-      expect(canvas.postA2UIMessage).not.toHaveBeenCalled();
+      expect(canvas.postV08Messages).not.toHaveBeenCalled();
     });
   });
 
@@ -104,7 +104,8 @@ describe("MessageRouter", () => {
       };
       router.route(makeEvent(payload));
 
-      expect(canvas.postA2UIMessage).toHaveBeenCalledWith(a2uiMsg);
+      // Canvas should receive v0.8-converted messages
+      expect(canvas.postV08Messages).toHaveBeenCalledTimes(1);
       expect(chat.postEvent).not.toHaveBeenCalled();
       expect(bridge.showDiff).not.toHaveBeenCalled();
     });
@@ -232,7 +233,7 @@ describe("MessageRouter", () => {
       // chat receives: text_delta, tool_start, diff, done = 4
       expect(chat.postEvent).toHaveBeenCalledTimes(4);
       // canvas receives: a2ui = 1
-      expect(canvas.postA2UIMessage).toHaveBeenCalledTimes(1);
+      expect(canvas.postV08Messages).toHaveBeenCalledTimes(1);
       // bridge receives: diff = 1
       expect(bridge.showDiff).toHaveBeenCalledTimes(1);
     });

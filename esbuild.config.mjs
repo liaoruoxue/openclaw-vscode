@@ -38,7 +38,24 @@ const canvasWebviewConfig = {
   jsx: "automatic",
 };
 
-const configs = [extensionConfig, chatWebviewConfig, canvasWebviewConfig];
+/** @type {esbuild.BuildOptions} */
+const a2uiBundleConfig = {
+  entryPoints: ["vendor/a2ui/bootstrap.js"],
+  bundle: true,
+  outfile: "dist/webview/a2ui.bundle.js",
+  format: "esm",
+  platform: "browser",
+  target: "chrome120",
+  sourcemap: false,
+  alias: {
+    "@a2ui/lit": "./vendor/a2ui/lit/src/index.ts",
+    "@a2ui/lit/ui": "./vendor/a2ui/lit/src/0.8/ui/ui.ts",
+    "@openclaw/a2ui-theme-context":
+      "./vendor/a2ui/lit/src/0.8/ui/context/theme.ts",
+  },
+};
+
+const configs = [extensionConfig, chatWebviewConfig, canvasWebviewConfig, a2uiBundleConfig];
 
 async function main() {
   if (isWatch) {

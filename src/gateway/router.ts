@@ -1,11 +1,11 @@
 import type {
   GatewayEvent,
   AgentEventPayload,
-  A2UIMessage,
 } from "./types";
 import type { ChatProvider } from "../vscode/chatProvider";
 import type { CanvasPanel } from "../vscode/canvasPanel";
 import type { VSCodeBridge } from "../vscode/bridge";
+import { convertMessagesToV08 } from "./a2uiV08";
 
 /** Minimal interface for the chat target — makes the router testable. */
 export interface ChatTarget {
@@ -14,7 +14,7 @@ export interface ChatTarget {
 
 /** Minimal interface for the canvas target. */
 export interface CanvasTarget {
-  postA2UIMessage(message: A2UIMessage): void;
+  postV08Messages(messages: Record<string, unknown>[]): void;
 }
 
 /** Minimal interface for the VS Code bridge target. */
@@ -50,9 +50,11 @@ export class MessageRouter {
         this.chat.postEvent(payload);
         break;
 
-      case "a2ui":
-        this.canvas.postA2UIMessage(payload.payload);
+      case "a2ui": {
+        const v08 = convertMessagesToV08([payload.payload as Record<string, unknown>]);
+        this.canvas.postV08Messages(v08);
         break;
+      }
 
       case "diff":
         this.chat.postEvent(payload);

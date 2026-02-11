@@ -1,12 +1,14 @@
 import * as vscode from "vscode";
 import * as crypto from "crypto";
 import { GatewayClient } from "./gateway/client";
+import { NodeConnection } from "./gateway/nodeConnection";
 import { MessageRouter } from "./gateway/router";
 import { ChatProvider } from "./vscode/chatProvider";
 import { CanvasPanel } from "./vscode/canvasPanel";
 import { VSCodeBridge } from "./vscode/bridge";
 import { initLogger, log, disposeLogger } from "./vscode/logger";
 import type { ConnectionState } from "./gateway/types";
+import { convertJsonlToV08, convertMessagesToV08, setA2UILogger } from "./gateway/a2uiV08";
 
 const DEVICE_KEYS_KEY = "openclaw.deviceKeys";
 
@@ -28,6 +30,7 @@ function getOrCreateDeviceKeys(globalState: vscode.Memento): DeviceKeys {
 }
 
 let gatewayClient: GatewayClient;
+let nodeConnection: NodeConnection;
 let bridge: VSCodeBridge;
 let statusBarItem: vscode.StatusBarItem;
 
@@ -78,10 +81,13 @@ export function activate(context: vscode.ExtensionContext) {
   const config = vscode.workspace.getConfiguration("openclaw");
   bridge = new VSCodeBridge();
   gatewayClient = new GatewayClient();
+  nodeConnection = new NodeConnection();
 
   // Output Channel
   const outputChannel = initLogger();
   context.subscriptions.push(outputChannel);
+  setA2UILogger(log);
+  gatewayClient.setLogger(log);
   log("Extension activated");
 
   // Status Bar
@@ -129,6 +135,76 @@ export function activate(context: vscode.ExtensionContext) {
   const canvasPanel = new CanvasPanel(context.extensionUri);
   canvasPanel.setGateway(gatewayClient);
 
+  // Node connection invoke handler — forward canvas commands to canvas panel
+  nodeConnection.onInvoke(async (command, params) => {
+    const p = params as Record<string, unknown> | undefined;
+    log(`[node.invoke] command=${command} params=${p ? JSON.stringify(p).slice(0, 500) : "(none)"}`);
+
+    switch (command) {
+      case "canvas.present":
+        log(`[node.invoke] canvas.present url=${(p?.url as string) ?? "(none)"}`);
+        canvasPanel.reveal(context.extensionUri);
+        return { ok: true };
+
+      case "canvas.hide":
+        return { ok: true };
+
+      case "canvas.navigate":
+        log(`[node.invoke] canvas.navigate url=${(p?.url as string) ?? "(none)"}`);
+        canvasPanel.reveal(context.extensionUri);
+        return { ok: true };
+
+      case "canvas.a2ui.push": {
+        const messages = (p?.messages as Record<string, unknown>[]) ?? [];
+        log(`[node.invoke] a2ui.push: ${messages.length} message(s)`);
+        const v08 = convertMessagesToV08(messages);
+        log(`[node.invoke] Converted to ${v08.length} v0.8 message(s)`);
+        canvasPanel.postV08Messages(v08);
+        return { ok: true };
+      }
+
+      case "canvas.a2ui.pushJSONL": {
+        const jsonl = (p?.jsonl as string) ?? "";
+        log(`[node.invoke] a2ui.pushJSONL: ${jsonl.length} chars`);
+        const v08 = convertJsonlToV08(jsonl);
+        log(`[node.invoke] Converted to ${v08.length} v0.8 message(s)`);
+        canvasPanel.postV08Messages(v08);
+        return { ok: true };
+      }
+
+      case "canvas.a2ui.reset":
+        return { ok: true };
+
+      case "canvas.eval": {
+        const js = (p?.javaScript as string) ?? "";
+        log(`[node.invoke] canvas.eval: ${js.length} chars`);
+        canvasPanel.reveal(context.extensionUri);
+        try {
+          const result = await canvasPanel.evalJs(js);
+          return { ok: true, payload: { result } };
+        } catch (err) {
+          log(`[node.invoke] canvas.eval error: ${err}`);
+          return { ok: true, payload: { result: "" } };
+        }
+      }
+
+      case "canvas.snapshot": {
+        const fmt = (p?.format as string) ?? "png";
+        log(`[node.invoke] canvas.snapshot format=${fmt}`);
+        try {
+          const snap = await canvasPanel.snapshot(fmt);
+          return { ok: true, payload: { base64: snap.base64, format: snap.format } };
+        } catch (err) {
+          log(`[node.invoke] canvas.snapshot error: ${err}`);
+          return { ok: false, error: `snapshot failed: ${err}` };
+        }
+      }
+
+      default:
+        return { ok: false, error: `unhandled command: ${command}` };
+    }
+  });
+
   // Message Router
   const router = new MessageRouter(chatProvider, canvasPanel, bridge);
   chatProvider.setOnNewRun(() => router.resetSequence());
@@ -148,10 +224,21 @@ export function activate(context: vscode.ExtensionContext) {
       }
       const token = config.get<string>("gateway.token", "");
       const deviceKeys = getOrCreateDeviceKeys(context.globalState);
-      log(`Connecting to ${url}`);
+      const deviceId = crypto.createHash("sha256")
+        .update(Buffer.from(deviceKeys.publicKey, "hex"))
+        .digest("hex");
+      log(`Connecting to ${url} (device: ${deviceId})`);
+      vscode.window.showInformationMessage(`Device ID: ${deviceId}`);
       try {
         await gatewayClient.connect(url, token || undefined, deviceKeys);
-        log("Connected successfully");
+        log("Operator connection established");
+        // Open parallel node connection for canvas
+        try {
+          await nodeConnection.connect(url, token || undefined, deviceKeys);
+          log("Node connection established");
+        } catch (nodeErr) {
+          log(`Node connection failed: ${nodeErr}`);
+        }
         vscode.window.showInformationMessage("OpenClaw: Connected to Gateway");
       } catch (err) {
         log(`Connection failed: ${err}`);
@@ -163,6 +250,7 @@ export function activate(context: vscode.ExtensionContext) {
 
     vscode.commands.registerCommand("openclaw.disconnect", () => {
       gatewayClient.disconnect();
+      nodeConnection.disconnect();
       log("Disconnected");
       vscode.window.showInformationMessage("OpenClaw: Disconnected");
     }),
@@ -187,6 +275,138 @@ export function activate(context: vscode.ExtensionContext) {
 
     vscode.commands.registerCommand("openclaw.settings", () => {
       vscode.commands.executeCommand("workbench.action.openSettings", "openclaw");
+    }),
+
+    // DEV-ONLY: simulate Gateway events through the full router pipeline
+    vscode.commands.registerCommand("openclaw.devTest", async () => {
+      const pick = await vscode.window.showQuickPick(
+        ["Canvas eval (draw test)", "Canvas snapshot", "A2UI Canvas (all components)", "Diff View", "Terminal Command", "Chat text_delta"],
+        { placeHolder: "Select feature to test" }
+      );
+      if (!pick) return;
+
+      let seq = 1;
+
+      if (pick.startsWith("Canvas eval")) {
+        canvasPanel.reveal(context.extensionUri);
+        // Wait a moment for webview to be ready
+        await new Promise((r) => setTimeout(r, 1500));
+        const js = `
+          document.body.style.margin='0';
+          document.body.style.background='#0b1020';
+          var c=document.createElement('canvas');
+          c.width=800; c.height=500;
+          c.style.display='block';
+          document.body.innerHTML='';
+          document.body.appendChild(c);
+          var ctx=c.getContext('2d');
+          var g=ctx.createLinearGradient(0,0,800,500);
+          g.addColorStop(0,'#0b1020');
+          g.addColorStop(1,'#1a2b6b');
+          ctx.fillStyle=g;
+          ctx.fillRect(0,0,800,500);
+          for(var i=0;i<120;i++){
+            ctx.beginPath();
+            ctx.arc(Math.random()*800,Math.random()*350,Math.random()*2+0.5,0,Math.PI*2);
+            ctx.fillStyle='rgba(255,255,255,'+(Math.random()*0.6+0.4)+')';
+            ctx.fill();
+          }
+          ctx.font='bold 36px sans-serif';
+          ctx.fillStyle='#fff';
+          ctx.textAlign='center';
+          ctx.fillText('Canvas Eval OK',400,280);
+          ctx.font='16px sans-serif';
+          ctx.fillStyle='#8af';
+          ctx.fillText('Rendered inside VS Code webview',400,320);
+          'done';
+        `;
+        try {
+          const result = await canvasPanel.evalJs(js);
+          log(`[devTest] canvas.eval result: "${result}"`);
+          vscode.window.showInformationMessage(`Canvas eval OK: "${result}"`);
+        } catch (err) {
+          log(`[devTest] canvas.eval error: ${err}`);
+          vscode.window.showErrorMessage(`Canvas eval failed: ${err}`);
+        }
+        return;
+      }
+
+      if (pick.startsWith("Canvas snapshot")) {
+        try {
+          const snap = await canvasPanel.snapshot("png");
+          log(`[devTest] snapshot: ${snap.format}, ${snap.base64.length} chars base64`);
+          vscode.window.showInformationMessage(`Snapshot OK: ${snap.format}, ${snap.base64.length} chars`);
+        } catch (err) {
+          log(`[devTest] snapshot error: ${err}`);
+          vscode.window.showErrorMessage(`Snapshot failed: ${err}`);
+        }
+        return;
+      }
+
+      if (pick.startsWith("A2UI")) {
+        // Send v0.8 format A2UI messages via the router
+        router.route({
+          type: "event", event: "agent", seq: seq++,
+          payload: {
+            kind: "a2ui",
+            payload: {
+              surfaceUpdate: {
+                surfaceId: "demo",
+                components: [
+                  { id: "root", component: { Column: { children: { explicitList: ["title", "body", "sub"] } } } },
+                  { id: "title", component: { Text: { text: { literalString: "A2UI Demo" }, usageHint: "h1" } } },
+                  { id: "body", component: { Text: { text: { literalString: "This is rendered by the official @a2ui/lit library." }, usageHint: "body" } } },
+                  { id: "sub", component: { Text: { text: { literalString: "Running inside VS Code webview." }, usageHint: "caption" } } },
+                ],
+              },
+            },
+          },
+        } as any);
+        router.route({
+          type: "event", event: "agent", seq: seq++,
+          payload: {
+            kind: "a2ui",
+            payload: {
+              beginRendering: { surfaceId: "demo", root: "root" },
+            },
+          },
+        } as any);
+        log("[devTest] Sent v0.8 A2UI messages through router");
+      }
+
+      if (pick.startsWith("Diff")) {
+        router.route({
+          type: "event", event: "agent", seq: seq++,
+          payload: {
+            kind: "diff",
+            path: "src/example.ts",
+            original: "function hello() {\n  return 'world';\n}\n",
+            modified: "function hello(name: string) {\n  return `Hello, ${name}!`;\n}\n",
+          },
+        } as any);
+        log("[devTest] Sent diff event through router");
+      }
+
+      if (pick.startsWith("Terminal")) {
+        await bridge.runInTerminal("echo '✅ OpenClaw terminal test successful!'");
+        log("[devTest] Ran terminal command through bridge");
+      }
+
+      if (pick.startsWith("Chat")) {
+        const texts = ["Hello ", "from ", "OpenClaw! ", "This ", "simulates ", "streaming."];
+        for (const text of texts) {
+          router.route({
+            type: "event", event: "agent", seq: seq++,
+            payload: { kind: "text_delta", content: text },
+          });
+          await new Promise((r) => setTimeout(r, 200));
+        }
+        router.route({
+          type: "event", event: "agent", seq: seq++,
+          payload: { kind: "done", stopReason: "end_turn" },
+        });
+        log("[devTest] Sent streaming text_delta events through router");
+      }
     })
   );
 
@@ -198,6 +418,7 @@ export function activate(context: vscode.ExtensionContext) {
 
 export function deactivate() {
   gatewayClient?.disconnect();
+  nodeConnection?.disconnect();
   bridge?.dispose();
   disposeLogger();
 }

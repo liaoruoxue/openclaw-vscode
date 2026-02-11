@@ -3,7 +3,7 @@
  *
  * Simulates the A2UI event lifecycle:
  *   server sends a2ui events → router dispatches to canvas target
- *   → verify surface creation, component updates, data model updates
+ *   → verify v0.8 messages arrive at canvas, chat/bridge are not affected
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { MockWebSocketFactory } from "../helpers/mock-ws";
@@ -16,7 +16,6 @@ import {
 import type {
   GatewayEvent,
   AgentEventPayload,
-  A2UIMessage,
 } from "../../src/gateway/types";
 
 // Mock ws module
@@ -34,11 +33,15 @@ vi.mock("ws", () => ({
 
 const { GatewayClient } = await import("../../src/gateway/client");
 
-/** Collects A2UI messages for assertion. */
+/** Collects v0.8 message batches for assertion. */
 class CanvasCollector implements CanvasTarget {
-  messages: A2UIMessage[] = [];
-  postA2UIMessage(message: A2UIMessage): void {
-    this.messages.push(message);
+  batches: Record<string, unknown>[][] = [];
+  postV08Messages(messages: Record<string, unknown>[]): void {
+    this.batches.push(messages);
+  }
+  /** Flatten all batches into a single array */
+  get allMessages(): Record<string, unknown>[] {
+    return this.batches.flat();
   }
 }
 
@@ -93,86 +96,92 @@ describe("Integration: Canvas/A2UI Flow", () => {
     return ws;
   }
 
-  it("should route createSurface a2ui event to canvas", async () => {
+  it("should route a2ui events with components to canvas as v0.8", async () => {
     const ws = await connectAndGetWs();
 
-    const a2uiPayload: A2UIMessage = {
-      type: "createSurface",
-      surfaceId: "surface-001",
-      title: "Code Review",
-      layout: { type: "stack", direction: "vertical" },
-    };
-
+    // Send a createSurface with a component — should produce v0.8 surfaceUpdate + beginRendering
     ws.simulateMessage(
       makeEvent(
-        { kind: "a2ui", payload: a2uiPayload },
+        {
+          kind: "a2ui",
+          payload: {
+            type: "createSurface",
+            surfaceId: "surface-001",
+            content: { type: "text", text: "Hello" },
+          },
+        },
         1
       )
     );
 
-    expect(canvasCollector.messages).toHaveLength(1);
-    expect(canvasCollector.messages[0]).toEqual(a2uiPayload);
-    expect(canvasCollector.messages[0].type).toBe("createSurface");
-    expect(canvasCollector.messages[0].surfaceId).toBe("surface-001");
+    // Canvas should have received one batch with v0.8 messages
+    expect(canvasCollector.batches).toHaveLength(1);
+    const batch = canvasCollector.batches[0];
+    expect(batch.length).toBeGreaterThanOrEqual(1);
+
+    // Should contain surfaceUpdate and beginRendering
+    const hasSurfaceUpdate = batch.some((m) => "surfaceUpdate" in m);
+    const hasBeginRendering = batch.some((m) => "beginRendering" in m);
+    expect(hasSurfaceUpdate).toBe(true);
+    expect(hasBeginRendering).toBe(true);
 
     // Verify chat did NOT receive the a2ui event
     expect(chatTarget.postEvent).not.toHaveBeenCalled();
   });
 
-  it("should route updateComponents a2ui event to canvas", async () => {
+  it("should route bare component a2ui events to canvas", async () => {
     const ws = await connectAndGetWs();
 
-    const a2uiPayload: A2UIMessage = {
-      type: "updateComponents",
-      surfaceId: "surface-001",
-      components: [
-        { id: "c1", type: "text-block", props: { text: "Hello" } },
-        { id: "c2", type: "button", props: { label: "Click me" } },
-      ],
-    };
-
+    // A bare component (e.g. table) — should be converted to v0.8
     ws.simulateMessage(
       makeEvent(
-        { kind: "a2ui", payload: a2uiPayload },
+        {
+          kind: "a2ui",
+          payload: {
+            type: "table",
+            columns: ["Name", "Age"],
+            rows: [["Alice", "30"]],
+          },
+        },
         1
       )
     );
 
-    expect(canvasCollector.messages).toHaveLength(1);
-    expect(canvasCollector.messages[0].type).toBe("updateComponents");
-    const components = canvasCollector.messages[0].components as unknown[];
-    expect(components).toHaveLength(2);
+    expect(canvasCollector.batches).toHaveLength(1);
+    const batch = canvasCollector.batches[0];
+    expect(batch.length).toBeGreaterThanOrEqual(1);
+    expect(batch.some((m) => "surfaceUpdate" in m)).toBe(true);
   });
 
-  it("should route updateDataModel a2ui event to canvas", async () => {
+  it("should pass through already-v0.8 messages", async () => {
     const ws = await connectAndGetWs();
 
-    const a2uiPayload: A2UIMessage = {
-      type: "updateDataModel",
-      surfaceId: "surface-001",
-      patch: {
-        "/title": "Updated Title",
-        "/status": "complete",
+    const v08Msg = {
+      surfaceUpdate: {
+        surfaceId: "demo",
+        components: [
+          { id: "t1", component: { Text: { text: { literalString: "Hi" } } } },
+        ],
       },
     };
 
     ws.simulateMessage(
       makeEvent(
-        { kind: "a2ui", payload: a2uiPayload },
+        { kind: "a2ui", payload: v08Msg },
         1
       )
     );
 
-    expect(canvasCollector.messages).toHaveLength(1);
-    expect(canvasCollector.messages[0].type).toBe("updateDataModel");
-    const patch = canvasCollector.messages[0].patch as Record<string, unknown>;
-    expect(patch["/title"]).toBe("Updated Title");
+    expect(canvasCollector.batches).toHaveLength(1);
+    const batch = canvasCollector.batches[0];
+    // v0.8 messages should pass through
+    expect(batch.some((m) => "surfaceUpdate" in m)).toBe(true);
   });
 
-  it("should handle a full surface lifecycle: create → components → data → more components", async () => {
+  it("should handle a full surface lifecycle with multiple a2ui events", async () => {
     const ws = await connectAndGetWs();
 
-    // Step 1: Create the surface
+    // Step 1: Surface with initial content
     ws.simulateMessage(
       makeEvent(
         {
@@ -180,75 +189,46 @@ describe("Integration: Canvas/A2UI Flow", () => {
           payload: {
             type: "createSurface",
             surfaceId: "surface-dashboard",
-            title: "Dashboard",
+            content: { type: "text", text: "Loading..." },
           },
         },
         1
       )
     );
 
-    // Step 2: Add initial components
+    // Step 2: Another component update
     ws.simulateMessage(
       makeEvent(
         {
           kind: "a2ui",
           payload: {
-            type: "updateComponents",
-            surfaceId: "surface-dashboard",
-            components: [
-              { id: "header", type: "text-block", props: { text: "Loading..." } },
-            ],
+            surfaceUpdate: {
+              surfaceId: "surface-dashboard",
+              components: [
+                { id: "header", component: { Text: { text: { literalString: "Dashboard Ready" } } } },
+              ],
+            },
           },
         },
         2
       )
     );
 
-    // Step 3: Update data model
+    // Step 3: Begin rendering
     ws.simulateMessage(
       makeEvent(
         {
           kind: "a2ui",
           payload: {
-            type: "updateDataModel",
-            surfaceId: "surface-dashboard",
-            patch: {
-              "/metrics/cpu": 45,
-              "/metrics/memory": 72,
-            },
+            beginRendering: { surfaceId: "surface-dashboard", root: "header" },
           },
         },
         3
       )
     );
 
-    // Step 4: Update components to reflect data
-    ws.simulateMessage(
-      makeEvent(
-        {
-          kind: "a2ui",
-          payload: {
-            type: "updateComponents",
-            surfaceId: "surface-dashboard",
-            components: [
-              { id: "header", type: "text-block", props: { text: "Dashboard Ready" } },
-              { id: "cpu-gauge", type: "gauge", props: { bind: "/metrics/cpu" } },
-              { id: "mem-gauge", type: "gauge", props: { bind: "/metrics/memory" } },
-            ],
-          },
-        },
-        4
-      )
-    );
-
-    // Verify all 4 A2UI messages arrived at canvas in order
-    expect(canvasCollector.messages).toHaveLength(4);
-    expect(canvasCollector.messages.map((m) => m.type)).toEqual([
-      "createSurface",
-      "updateComponents",
-      "updateDataModel",
-      "updateComponents",
-    ]);
+    // All 3 events should have been routed to canvas
+    expect(canvasCollector.batches).toHaveLength(3);
   });
 
   it("should handle mixed a2ui and chat events correctly", async () => {
@@ -267,7 +247,14 @@ describe("Integration: Canvas/A2UI Flow", () => {
       makeEvent(
         {
           kind: "a2ui",
-          payload: { type: "createSurface", surfaceId: "s1" },
+          payload: {
+            surfaceUpdate: {
+              surfaceId: "s1",
+              components: [
+                { id: "t1", component: { Text: { text: { literalString: "Hi" } } } },
+              ],
+            },
+          },
         },
         2
       )
@@ -289,9 +276,8 @@ describe("Integration: Canvas/A2UI Flow", () => {
       )
     );
 
-    // Canvas got exactly 1 a2ui message
-    expect(canvasCollector.messages).toHaveLength(1);
-    expect(canvasCollector.messages[0].type).toBe("createSurface");
+    // Canvas got exactly 1 batch
+    expect(canvasCollector.batches).toHaveLength(1);
 
     // Chat got text_delta + text_delta + done = 3
     expect(chatTarget.postEvent).toHaveBeenCalledTimes(3);
@@ -304,7 +290,14 @@ describe("Integration: Canvas/A2UI Flow", () => {
       makeEvent(
         {
           kind: "a2ui",
-          payload: { type: "createSurface", surfaceId: "s1" },
+          payload: {
+            surfaceUpdate: {
+              surfaceId: "s1",
+              components: [
+                { id: "t1", component: { Text: { text: { literalString: "Hi" } } } },
+              ],
+            },
+          },
         },
         1
       )
@@ -316,26 +309,36 @@ describe("Integration: Canvas/A2UI Flow", () => {
   it("should handle sequence ordering for a2ui events", async () => {
     const ws = await connectAndGetWs();
 
-    // Send events out of order
-    ws.simulateMessage(
-      makeEvent(
-        {
-          kind: "a2ui",
-          payload: { type: "createSurface", surfaceId: "s1" },
-        },
-        2
-      )
-    );
-
-    // This has a lower seq than the previous event, should be dropped
+    // Send event with seq 2
     ws.simulateMessage(
       makeEvent(
         {
           kind: "a2ui",
           payload: {
-            type: "updateComponents",
-            surfaceId: "s1",
-            components: [],
+            surfaceUpdate: {
+              surfaceId: "s1",
+              components: [
+                { id: "t1", component: { Text: { text: { literalString: "First" } } } },
+              ],
+            },
+          },
+        },
+        2
+      )
+    );
+
+    // This has a lower seq — should be dropped
+    ws.simulateMessage(
+      makeEvent(
+        {
+          kind: "a2ui",
+          payload: {
+            surfaceUpdate: {
+              surfaceId: "s1",
+              components: [
+                { id: "t2", component: { Text: { text: { literalString: "Late" } } } },
+              ],
+            },
           },
         },
         1
@@ -343,7 +346,6 @@ describe("Integration: Canvas/A2UI Flow", () => {
     );
 
     // Only the first event should have made it through
-    expect(canvasCollector.messages).toHaveLength(1);
-    expect(canvasCollector.messages[0].type).toBe("createSurface");
+    expect(canvasCollector.batches).toHaveLength(1);
   });
 });

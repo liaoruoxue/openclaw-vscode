@@ -71,6 +71,8 @@ export class GatewayClient {
   private stateHandlers: Set<StateHandler> = new Set();
   private _state: ConnectionState = "disconnected";
   private _sessionKey: string | null = null;
+  private _canvasHostUrl: string | null = null;
+  private _log: (msg: string) => void = () => {};
 
   private url: string | null = null;
   private token: string | undefined;
@@ -90,6 +92,14 @@ export class GatewayClient {
 
   get sessionKey(): string | null {
     return this._sessionKey;
+  }
+
+  get canvasHostUrl(): string | null {
+    return this._canvasHostUrl;
+  }
+
+  setLogger(fn: (msg: string) => void): void {
+    this._log = fn;
   }
 
   async connect(url: string, token?: string, deviceKeys?: { publicKey: string; privateKey: string }): Promise<void> {
@@ -170,6 +180,22 @@ export class GatewayClient {
       ...(agent ? { agent } : {}),
     });
     return result as Session;
+  }
+
+  async nodePairRequest(): Promise<unknown> {
+    const deviceId = this.deviceKeys
+      ? crypto.createHash("sha256")
+          .update(Buffer.from(this.deviceKeys.publicKey, "hex"))
+          .digest("hex")
+      : crypto.randomUUID();
+    return this.sendCommand("node.pair.request", {
+      nodeId: deviceId,
+      displayName: `VS Code (${process.platform})`,
+      platform: process.platform,
+      version: "0.1.0",
+      caps: ["canvas"],
+      commands: ["canvas.present"],
+    });
   }
 
   protected emit(event: GatewayEvent): void {
@@ -372,6 +398,11 @@ export class GatewayClient {
         // Gateway responds to our connect req with res frame
         if (parsed.type === "res" && parsed.id === "connect") {
           if (parsed.ok === true) {
+            // Extract canvasHostUrl from hello-ok payload
+            const payload = parsed.payload as Record<string, unknown> | undefined;
+            if (typeof payload?.canvasHostUrl === "string") {
+              this._canvasHostUrl = payload.canvasHostUrl;
+            }
             completeHandshake();
           } else {
             handshakeDone = true;
@@ -401,9 +432,13 @@ export class GatewayClient {
             }
           } else if (p?.kind != null) {
             // Already-translated agent events (tool_start, tool_result, diff, done, etc.)
+            this._log(`[gateway] Agent event: kind=${p.kind} seq=${seq}`);
             this.emit(parsed as unknown as GatewayEvent);
+          } else {
+            // Log dropped agent events for debugging
+            const keys = p ? Object.keys(p).join(",") : "(null)";
+            this._log(`[gateway] Dropped agent event: keys=[${keys}] seq=${seq}`);
           }
-          // Ignore raw agent lifecycle events (no stream, no kind)
 
         } else if (eventName === "chat") {
           // Chat events are batched — only use for final/error/aborted status.

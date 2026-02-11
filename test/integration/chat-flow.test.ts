@@ -58,7 +58,7 @@ describe("Integration: Chat Flow", () => {
 
     client = new GatewayClient();
     chatCollector = new ChatCollector();
-    canvasTarget = { postA2UIMessage: vi.fn() };
+    canvasTarget = { postV08Messages: vi.fn() };
     bridgeTarget = { showDiff: vi.fn() };
     router = new MessageRouter(chatCollector, canvasTarget, bridgeTarget);
 
